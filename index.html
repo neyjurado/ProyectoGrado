@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>L.D.P. Conocoto - Gestión Deportiva</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Colores institucionales (Azul Marino Oscuro) */
+        .bg-conocoto-blue { background-color: #001a4d; } 
+        .text-conocoto-gold { color: #FFD700; }
+        .border-conocoto-gold { border-color: #FFD700; }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans">
+
+    <nav class="bg-conocoto-blue py-6 px-4 shadow-xl sticky top-0 z-50">
+    <div class="container mx-auto flex justify-between items-center">
+        <div class="flex items-center space-x-4">
+            <div class="bg-white p-1 rounded-full shadow-lg border border-gray-200">
+                <img src="imagenes/logo.png" alt="Logo LDP Conocoto" class="h-16 w-16 md:h-20 md:w-20 rounded-full object-cover">
+            </div>
+            <h1 class="text-2xl md:text-3xl font-black text-white tracking-tighter">
+                L.D.P. <span class="text-conocoto-gold">CONOCOTO</span>
+            </h1>
+        </div>
+
+        <div class="hidden md:flex space-x-8 text-white text-lg font-medium">
+            <a href="#" class="hover:text-yellow-400 transition">Inicio</a>
+            <a href="#" class="hover:text-yellow-400 transition">Equipos</a>
+            <a href="#" class="hover:text-yellow-400 transition">Estadísticas</a>
+        </div>
+
+        <a href="login.html" class="bg-[#FFD700] text-blue-900 px-6 py-3 rounded-full font-bold hover:bg-yellow-500 transition shadow-md inline-block">
+            Iniciar Sesión
+        </a>
+    </div>
+</nav>
+
+    <header class="bg-white py-10 shadow-sm border-b">
+        <div class="container mx-auto px-4">
+            <h2 class="text-4xl font-extrabold text-gray-900 mb-2">Panel Informativo</h2>
+            <p class="text-gray-600">Gestión Integral de la Liga Deportiva Parroquial Conocoto</p>
+        </div>
+    </header>
+
+    <main class="container mx-auto mt-8 px-4">
+        
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <div class="lg:col-span-2">
+                <div class="bg-gradient-to-r from-[#001a4d] to-blue-900 p-6 rounded-2xl shadow-lg mb-8 text-white flex items-center justify-between">
+                    <div>
+                        <p class="text-blue-100 uppercase text-xs font-bold tracking-widest mb-1">Estado del Tiempo</p>
+                        <h3 class="text-2xl font-bold">Estadio La Moya</h3>
+                        <p id="texto-clima" class="text-lg opacity-90">Sincronizando con Open-Meteo...</p>
+                    </div>
+                    <div id="icono-clima" class="text-6xl bg-white/20 p-3 rounded-full flex items-center justify-center h-20 w-20">
+                        ☁️
+                    </div>
+                </div>
+
+                <div class="flex justify-between items-end mb-6">
+                    <h3 class="text-2xl font-bold text-gray-800 border-l-4 border-conocoto-blue pl-3">Equipos Inscritos</h3>
+                </div>
+
+                <div id="contenedor-equipos" class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div id="cargando" class="col-span-full py-10 text-center">
+                        <div class="inline-block animate-spin rounded-full h-8 w-8 border-4 border-blue-900 border-t-transparent"></div>
+                        <p class="mt-4 text-gray-600 font-medium tracking-wide">Sincronizando base de datos...</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <div class="bg-white p-6 rounded-2xl shadow-md border border-gray-100">
+                    <h4 class="font-bold text-gray-800 mb-4 flex items-center">
+                        <span class="mr-2 text-xl">📄</span> Documentos Oficiales
+                    </h4>
+                    <ul class="space-y-4">
+                        <li class="flex items-center text-sm text-blue-700 hover:text-blue-900 font-medium hover:underline cursor-pointer">
+                            <span class="mr-2">📥</span> Reglamento General 2026
+                        </li>
+                        <li class="flex items-center text-sm text-blue-700 hover:text-blue-900 font-medium hover:underline cursor-pointer">
+                            <span class="mr-2">📥</span> Cronograma de Vocalías
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="bg-slate-900 text-white mt-16 pt-12 pb-6">
+        <div class="container mx-auto px-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-12 mb-8">
+                <div>
+                    <h3 class="text-2xl font-bold mb-6 text-conocoto-gold">L.D.P. Conocoto</h3>
+                    <div class="space-y-4 text-gray-400">
+                        <p class="flex items-start">
+                            <span class="mr-3 text-xl">📍</span> 
+                            <span>Estadio Parroquial "La Moya"<br>Calle Julio Moreno, Conocoto.</span>
+                        </p>
+                        <p class="flex items-center">
+                            <span class="mr-3 text-xl">📧</span> info@ligaconocoto.com
+                        </p>
+                        <p class="flex items-center">
+                            <span class="mr-3 text-xl">📱</span> +593 99 999 9999
+                        </p>
+                    </div>
+                </div>
+
+                <div class="rounded-xl overflow-hidden shadow-2xl border-2 border-slate-700 h-64 relative">
+                    <iframe 
+                        src="https://www.google.com/maps/embed?pb=!1m14!1m8!1m3!1d8582.148055188447!2d-78.472603!3d-0.299682!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x91d5bd1babd9739b%3A0xd2388fc698e5aec9!2sEstadio%20Parroquial%20%22La%20Moya%22!5e1!3m2!1ses-419!2sus!4v1778878562895!5m2!1ses-419!2sus" 
+                        width="100%" 
+                        height="100%" 
+                        style="border:0; position: absolute; top: 0; left: 0;" 
+                        allowfullscreen="" 
+                        loading="lazy" 
+                        referrerpolicy="no-referrer-when-downgrade">
+                    </iframe>
+                </div>
+            </div>
+            <div class="border-t border-slate-800 pt-6 text-center text-sm text-gray-500">
+                © 2026 Liga Deportiva Parroquial Conocoto. Desarrollado para el proyecto de grado.
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        // 1. CARGAR CLIMA DESDE OPEN-METEO
+        async function cargarClima() {
+            const lat = -0.30;
+            const lon = -78.47;
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`;
+
+            try {
+                const res = await fetch(url);
+                const data = await res.json();
+                const temp = data.current_weather.temperature;
+                const code = data.current_weather.weathercode;
+                
+                document.getElementById('texto-clima').innerText = `Temperatura actual: ${temp}°C`;
+                
+                let icono = "⛅";
+                if(code === 0) icono = "☀️";
+                else if(code > 50) icono = "🌧️";
+                document.getElementById('icono-clima').innerText = icono;
+            } catch (err) {
+                document.getElementById('texto-clima').innerText = "Clima no disponible";
+            }
+        }
+
+        // 2. CARGAR EQUIPOS DESDE TU API FASTAPI
+        async function cargarEquipos() {
+            try {
+                const res = await fetch('http://127.0.0.1:8000/equipos');
+                if (!res.ok) throw new Error("Error en la red");
+                const equipos = await res.json();
+                
+                const contenedor = document.getElementById('contenedor-equipos');
+                const loader = document.getElementById('cargando');
+                if (loader) loader.remove();
+
+                equipos.forEach(eq => {
+                    const card = document.createElement('div');
+                    card.className = "bg-white p-5 rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition group cursor-pointer border-t-4 border-[#001a4d]";
+                    card.innerHTML = `
+                        <div class="flex justify-between items-start mb-4">
+                            <div class="bg-blue-50 p-3 rounded-lg group-hover:bg-blue-100 transition">
+                                🛡️
+                            </div>
+                            <span class="text-[10px] font-bold uppercase tracking-widest bg-gray-100 px-2 py-1 rounded text-gray-500">
+                                ${eq.categoria}
+                            </span>
+                        </div>
+                        <h4 class="font-bold text-gray-900 text-lg group-hover:text-blue-800 transition">${eq.nombre}</h4>
+                        <p class="text-xs text-gray-400 mt-1">ID Registro: #${eq.id}</p>
+                    `;
+                    contenedor.appendChild(card);
+                });
+            } catch (err) {
+                const loader = document.getElementById('cargando');
+                if (loader) {
+                    loader.innerHTML = `
+                        <div class="text-red-500 text-4xl mb-2">⚠️</div>
+                        <p class="text-red-600 font-medium">No se pudo conectar con la base de datos.</p>
+                        <p class="text-gray-500 text-sm mt-1">Asegúrate de ejecutar FastAPI y abrir la página usando un servidor local (http://127.0.0.1:5500).</p>
+                    `;
+                }
+            }
+        }
+
+        // Inicializar funciones al cargar la página
+        cargarClima();
+        cargarEquipos();
+    </script>
+</body>
+</html>

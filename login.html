@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesión - L.D.P. Conocoto</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .bg-conocoto-blue { background-color: #001a4d; }
+        .text-conocoto-gold { color: #FFD700; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans min-h-screen flex flex-col">
+
+    <nav class="bg-conocoto-blue p-4 shadow-md">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <span class="text-2xl bg-white p-1 rounded-full">⚽</span>
+                <h1 class="text-xl font-black text-white tracking-tighter">
+                    L.D.P. <span class="text-conocoto-gold">CONOCOTO</span>
+                </h1>
+            </div>
+            <a href="index.html" class="text-white hover:text-yellow-400 font-semibold text-sm transition">
+                ← Volver al Inicio
+            </a>
+        </div>
+    </nav>
+
+    <main class="flex-grow flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden border-t-8 border-[#001a4d]">
+            
+            <div class="p-8">
+                <div class="text-center mb-8">
+                    <h2 class="text-3xl font-extrabold text-gray-900">Bienvenido</h2>
+                    <p class="text-gray-500 mt-2 text-sm">Ingresa tus credenciales para acceder al sistema</p>
+                </div>
+
+                <form id="formulario-login" class="space-y-6">
+                    <div>
+                        <label for="correo" class="block text-sm font-semibold text-gray-700 mb-1">Correo Electrónico</label>
+                        <input 
+                            type="email" 
+                            id="correo" 
+                            class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
+                            placeholder="ejemplo@correo.com"
+                            required
+                        >
+                    </div>
+
+                    <div>
+                        <label for="password" class="block text-sm font-semibold text-gray-700 mb-1">Contraseña</label>
+                        <input 
+                            type="password" 
+                            id="password" 
+                            class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
+                            placeholder="••••••••"
+                            required
+                        >
+                    </div>
+
+                    <button 
+                        type="submit" 
+                        class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-bold py-3 px-4 rounded-lg shadow-lg hover:shadow-xl transition duration-200"
+                    >
+                        Ingresar al Sistema
+                    </button>
+                </form>
+
+                <div class="mt-6 text-center">
+                    <p class="text-sm text-gray-600">
+                        ¿Problemas para ingresar? <a href="#" class="text-blue-700 hover:underline font-semibold">Contacta al administrador</a>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        document.getElementById('formulario-login').addEventListener('submit', async function(e) {
+            e.preventDefault(); // Evita que la página se recargue
+            
+            const correo = document.getElementById('correo').value;
+            const password = document.getElementById('password').value;
+            const boton = document.querySelector('button[type="submit"]');
+            
+            // Cambiamos el texto del botón mientras carga
+            boton.innerText = "Verificando...";
+            boton.disabled = true;
+
+            try {
+                // Hacemos la petición POST a FastAPI
+                const respuesta = await fetch('http://127.0.0.1:8000/login', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ correo: correo, password: password })
+                });
+
+                const datos = await respuesta.json();
+
+                if (respuesta.ok) {
+                    // Login Exitoso (Status 200)
+                    alert("¡Bienvenido, " + datos.usuario.rol + "!");
+                    
+                    // Guardamos la sesión en el navegador para recordarlo
+                    localStorage.setItem('usuario', JSON.stringify(datos.usuario));
+                    
+                    // Redirigimos según el rol del usuario
+                    if (datos.usuario.rol === 'Administrador') {
+                        window.location.href = "dashboard.html";
+                    } else if (datos.usuario.rol === 'Jugador') {
+                        window.location.href = "jugador_dashboard.html";
+                    } else {
+                        window.location.href = "index.html"; // Por si acaso hay otro rol
+                    }
+                } else {
+                    // Login Fallido (Status 401 u otros errores)
+                    alert("Error: " + datos.detail);
+                    boton.innerText = "Ingresar al Sistema";
+                    boton.disabled = false;
+                }
+            } catch (error) {
+                console.error("Error de conexión:", error);
+                alert("Error de conexión con el servidor. Asegúrate de que FastAPI esté corriendo.");
+                boton.innerText = "Ingresar al Sistema";
+                boton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>
