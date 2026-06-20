@@ -5,15 +5,15 @@ import { useRouter } from 'vue-router'
 const router = useRouter()
 
 // ==========================================
-// 1. VARIABLES REACTIVAS
+// 1. VARIABLES REACTIVAS REALES
 // ==========================================
 const equipos = ref([])
 const cargando = ref(true)
 
-// Datos simulados (Próximamente se conectarán al backend)
+// Datos que empiezan limpios desde cero
 const estadisticasExtra = ref({
-    jugadores: 350,
-    categorias: 2
+    jugadores: 0,    // Sincronizado a 0 por limpieza de BD
+    categorias: 2   // Máxima y Primera
 })
 
 const categorias = ref([
@@ -21,25 +21,13 @@ const categorias = ref([
     { id: 2, nombre: 'Primera', icono: '⚽' }
 ])
 
-const goleadores = ref([
-    { id: 1, nombre: 'Fernando Llumiquinga', equipo: 'Juvenil Las Tolas', goles: 14, categoria: 'Máxima' },
-    { id: 2, nombre: 'Jorge Pallo', equipo: 'C.D. Millonarios', goles: 12, categoria: 'Máxima' },
-    { id: 3, nombre: 'Luis Simba', equipo: 'Patria', goles: 10, categoria: 'Primera' },
-    { id: 4, nombre: 'Carlos Ruiz', equipo: 'San Lorenzo', goles: 8, categoria: 'Primera' }
-])
-
-const partidos = ref([
-    { id: 1, local: 'C.D. Millonarios', visitante: 'LDU', fecha: 'Sábado 20 Jun', hora: '10:00 AM', estado: 'Pendiente' },
-    { id: 2, local: 'Juvenil Las Tolas', visitante: 'Patria', fecha: 'Sábado 20 Jun', hora: '12:00 PM', estado: 'Pendiente' },
-    { id: 3, local: 'LDP Conocoto', visitante: 'San Lorenzo', fecha: 'Domingo 21 Jun', hora: '09:00 AM', estado: 'Pendiente' },
-    { id: 4, local: 'Nacional', visitante: 'Quito FC', fecha: 'Domingo 21 Jun', hora: '11:00 AM', estado: 'Pendiente' }
-])
+// Arreglos vacíos reales listos para recibir datos de tu base de datos
+const goleadores = ref([])
+const partidos = ref([])
 
 // ==========================================
 // 2. LÓGICA DE BASE DE DATOS
 // ==========================================
-
-// Consultamos los equipos reales desde tu FastAPI
 const cargarEquipos = async () => {
     try {
         const res = await fetch('http://127.0.0.1:8000/equipos');
@@ -52,7 +40,6 @@ const cargarEquipos = async () => {
     }
 }
 
-// Calculamos el total de equipos en tiempo real
 const totalEquipos = computed(() => equipos.value.length)
 
 // ==========================================
@@ -63,11 +50,9 @@ const irALogin = () => router.push('/login')
 const verCategoria = (nombreCategoria) => console.log("Navegando a posiciones de:", nombreCategoria)
 
 const abrirDetallePartido = (idPartido) => {
-    // A futuro: Aquí abriremos el modal y cargaremos la API del Clima
     console.log("Abriendo detalles del partido para el ID:", idPartido)
 }
 
-// Ejecutar apenas la página cargue
 onMounted(() => {
     cargarEquipos()
 })
@@ -76,10 +61,8 @@ onMounted(() => {
 <template>
     <div class="bg-gray-100 font-sans min-h-screen pb-12">
         
-        <!-- HEADER PREDOMINANTE AZUL -->
         <nav class="bg-[#001a4d] px-6 py-4 shadow-lg flex justify-between items-center sticky top-0 z-50">
             <div class="flex items-center space-x-4 cursor-pointer">
-                <!-- Logo perfectamente redondeado -->
                 <div class="bg-white p-1 rounded-full w-14 h-14 flex items-center justify-center shadow-md">
                     <img src="/imagenes/logo.png" alt="Logo LDP Conocoto" class="h-12 w-12 object-cover rounded-full" />
                 </div>
@@ -96,21 +79,15 @@ onMounted(() => {
             </div>
         </nav>
 
-        <!-- BANNER PRINCIPAL TOTALMENTE LIMPIO (SIN DESTELLOS NI TEXTOS) -->
         <div class="relative w-full h-[400px] bg-cover bg-center shadow-md" style="background-image: url('/imagenes/fondo.png');">
-            <!-- La imagen se muestra 100% natural, sin degradados encima -->
         </div>
 
-        <!-- CONTENIDO PRINCIPAL -->
         <main class="container mx-auto px-4 mt-8 relative z-20">
             
-            <!-- GRILLA DE SECCIONES -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-10">
                 
-                <!-- COLUMNA IZQUIERDA (Categorías, Goleadores y Partidos) -->
                 <div class="lg:col-span-2 space-y-10">
                     
-                    <!-- TARJETAS DE CATEGORÍAS -->
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
                         <div class="bg-[#001a4d] text-white p-4">
                             <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">📊</span> Tablas de Posiciones</h3>
@@ -126,7 +103,6 @@ onMounted(() => {
                         </div>
                     </div>
 
-                    <!-- TOP GOLEADORES -->
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
                         <div class="bg-[#001a4d] text-white p-4">
                             <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🔥</span> Máximos Goleadores</h3>
@@ -153,19 +129,20 @@ onMounted(() => {
                                         </td>
                                         <td class="p-4 text-center font-black text-xl text-yellow-500">{{ gol.goles }}</td>
                                     </tr>
+                                    <tr v-if="goleadores.length === 0">
+                                        <td colspan="4" class="p-8 text-center text-gray-400 italic font-medium">No hay goles registrados en el torneo actual.</td>
+                                    </tr>
                                 </tbody>
                             </table>
                         </div>
                     </div>
 
-                    <!-- CARRUSEL/LISTA DE PARTIDOS (Ahora aprovechando el ancho doble) -->
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
                         <div class="bg-[#001a4d] border-b p-4 flex justify-between items-center text-white">
                             <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🏟️</span> Próxima Fecha</h3>
-                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-2 py-1 rounded uppercase tracking-wider shadow-sm">Jornada 14</span>
+                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-2 py-1 rounded uppercase tracking-wider shadow-sm">Jornada Activa</span>
                         </div>
                         
-                        <!-- Usamos un Grid para que los partidos se acomoden lado a lado y usen bien el espacio -->
                         <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto">
                             <div v-for="partido in partidos" :key="partido.id" @click="abrirDetallePartido(partido.id)" class="bg-gray-50 border border-gray-200 rounded-lg p-4 cursor-pointer hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
                                 <div class="text-center mb-3 border-b border-gray-200 pb-2">
@@ -184,15 +161,14 @@ onMounted(() => {
                                 </div>
                                 <p class="text-[10px] text-center text-blue-500 font-semibold mt-3">Ver detalles del partido →</p>
                             </div>
+                            <div v-if="partidos.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos programados para este fin de semana.</div>
                         </div>
                     </div>
 
                 </div>
 
-                <!-- COLUMNA DERECHA (Estadísticas y Documentos) -->
                 <div class="space-y-10">
                     
-                    <!-- ESTADÍSTICAS DEL TORNEO (Compacta) -->
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden flex flex-col">
                         <div class="bg-[#001a4d] text-white p-3 text-center">
                             <h3 class="text-sm font-black uppercase tracking-widest flex justify-center items-center">
@@ -218,7 +194,6 @@ onMounted(() => {
                         </div>
                     </div>
 
-                    <!-- DOCUMENTOS OFICIALES -->
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
                         <div class="bg-gray-100 text-[#001a4d] p-4 border-b">
                             <h3 class="text-sm font-black uppercase flex items-center"><span class="mr-2">📄</span> Documentos</h3>
@@ -239,7 +214,6 @@ onMounted(() => {
             </div>
         </main>
 
-        <!-- FOOTER AZUL OSCURO -->
         <footer class="bg-[#001a4d] text-white mt-16 pt-12 pb-6 border-t-4 border-yellow-400">
             <div class="container mx-auto px-4">
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-12 mb-8">
@@ -281,7 +255,6 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* Scrollbar elegante y minimalista para el bloque de partidos */
 ::-webkit-scrollbar {
     width: 6px;
 }
