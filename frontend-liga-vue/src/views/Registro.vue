@@ -13,9 +13,25 @@ const cargando = ref(false)
 const mensajeError = ref('')
 const mensajeExito = ref('')
 
+const validarPasswordSegura = (valor) => {
+    const texto = (valor || '').trim()
+    if (texto.length < 8) return 'La contraseña debe tener al menos 8 caracteres.'
+    if (!/[A-Z]/.test(texto)) return 'La contraseña debe incluir al menos una mayúscula.'
+    if (!/[a-z]/.test(texto)) return 'La contraseña debe incluir al menos una minúscula.'
+    if (!/\d/.test(texto)) return 'La contraseña debe incluir al menos un número.'
+    if (!/[^A-Za-z0-9]/.test(texto)) return 'La contraseña debe incluir al menos un carácter especial.'
+    return ''
+}
+
 const registrarse = async () => {
     mensajeError.value = ''
     mensajeExito.value = ''
+
+    const validacionPassword = validarPasswordSegura(password.value)
+    if (validacionPassword) {
+        mensajeError.value = validacionPassword
+        return
+    }
 
     if (password.value !== confirmarPassword.value) {
         mensajeError.value = "Las contraseñas no coinciden. Intenta de nuevo."
@@ -27,7 +43,7 @@ const registrarse = async () => {
     try {
         const payload = {
             cedula: cedula.value.trim(),
-            correo: correo.value.trim(),
+            correo: correo.value.trim().toLowerCase(),
             password: password.value
         }
 
@@ -50,7 +66,7 @@ const registrarse = async () => {
                 router.push('/login')
             }, 3000)
         } else {
-            mensajeError.value = data.detail
+            mensajeError.value = data.detail || 'No se pudo completar el registro.'
         }
     } catch (error) {
         mensajeError.value = "Error de red. No se pudo contactar con el servidor."
@@ -87,22 +103,30 @@ const registrarse = async () => {
                     
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-1">Cédula de Identidad</label>
-                        <input v-model="cedula" type="text" required placeholder="Tu número de cédula..."
+                           <input v-model="cedula" type="text" required placeholder="Tu número de cédula..."
                                class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
                         <p class="text-[10px] text-gray-400 mt-1">* Debes estar inscrito previamente por tu equipo.</p>
                     </div>
 
-                    <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
-                        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
-                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
-                    </div>
+                    <!-- Cambia tus campos así: -->
 
-                    <div>
-                        <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
-                        <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
-                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
-                    </div>
+<div>
+    <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
+        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
+           autocomplete="off"
+            style="text-transform: lowercase;"
+           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+</div>
+
+<div>
+    <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
+    <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
+           autocomplete="new-password"
+           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+    <p class="text-[11px] text-gray-500 mt-2 leading-5">
+        Usa al menos 8 caracteres, una mayúscula, una minúscula, un número y un símbolo.
+    </p>
+</div>
 
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-1">Confirmar Contraseña</label>

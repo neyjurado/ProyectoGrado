@@ -4,58 +4,88 @@ import { useRouter } from 'vue-router'
 
 const router = useRouter()
 
-// ==========================================
-// 1. VARIABLES REACTIVAS REALES
-// ==========================================
+// Variables globales
 const equipos = ref([])
+const partidos = ref([])
+const totalJugadores = ref(0)
 const cargando = ref(true)
 
-// Datos que empiezan limpios desde cero
-const estadisticasExtra = ref({
-    jugadores: 0,    // Sincronizado a 0 por limpieza de BD
-    categorias: 2   // Máxima y Primera
-})
-
-const categorias = ref([
+// Variables de estadísticas y categorías
+const categorias = [
     { id: 1, nombre: 'Máxima', icono: '🏆' },
     { id: 2, nombre: 'Primera', icono: '⚽' }
-])
-
-// Arreglos vacíos reales listos para recibir datos de tu base de datos
+]
+const categoriaSeleccionada = ref('Máxima')
+const filtroCalendario = ref('Todas')
+const tablaPosiciones = ref([])
 const goleadores = ref([])
-const partidos = ref([])
 
-// ==========================================
-// 2. LÓGICA DE BASE DE DATOS
-// ==========================================
-const cargarEquipos = async () => {
+// Funciones de carga
+const cargarDatosGenerales = async () => {
     try {
-        const res = await fetch('http://127.0.0.1:8000/equipos');
-        if (!res.ok) throw new Error("Error en la red");
-        equipos.value = await res.json();
-    } catch (err) {
-        console.error("Error cargando equipos", err);
+        const [resEq, resPart, resJug] = await Promise.all([
+            fetch('http://127.0.0.1:8000/equipos'),
+            fetch('http://127.0.0.1:8000/partidos'),
+            fetch('http://127.0.0.1:8000/jugadores')
+        ])
+        
+        if (resEq.ok) equipos.value = await resEq.json()
+        if (resPart.ok) partidos.value = await resPart.json()
+        if (resJug.ok) {
+            const j = await resJug.json()
+            totalJugadores.value = j.length
+        }
+    } catch (error) {
+        console.error("Error cargando los datos:", error)
     } finally {
-        cargando.value = false;
+        cargando.value = false
     }
 }
 
-const totalEquipos = computed(() => equipos.value.length)
-
-// ==========================================
-// 3. FUNCIONES DE NAVEGACIÓN
-// ==========================================
-const irARegistro = () => router.push('/registro-jugador')
-const irALogin = () => router.push('/login')
-const verCategoria = (nombreCategoria) => console.log("Navegando a posiciones de:", nombreCategoria)
-
-const abrirDetallePartido = (idPartido) => {
-    console.log("Abriendo detalles del partido para el ID:", idPartido)
+const verCategoria = async (categoria) => {
+    categoriaSeleccionada.value = categoria
+    try {
+        const [resPos, resGol] = await Promise.all([
+            fetch(`http://127.0.0.1:8000/estadisticas/posiciones/${categoria}`),
+            fetch(`http://127.0.0.1:8000/goleadores/${categoria}`)
+        ])
+        
+        if (resPos.ok) tablaPosiciones.value = await resPos.json()
+        if (resGol.ok) goleadores.value = await resGol.json()
+    } catch (error) {
+        console.error("Error cargando estadísticas:", error)
+    }
 }
 
-onMounted(() => {
-    cargarEquipos()
+onMounted(async () => {
+    await cargarDatosGenerales()
+    await verCategoria('Máxima') // Carga por defecto la serie Máxima
 })
+
+// Computadas
+const partidosCalendario = computed(() => {
+    if (filtroCalendario.value === 'Todas') return partidos.value
+    return partidos.value.filter(p => p.categoria_local === filtroCalendario.value || p.categoria_visitante === filtroCalendario.value)
+})
+
+const partidosCalendarioPendientes = computed(() => partidosCalendario.value.filter(p => p.estado === 'Pendiente'))
+const partidosCalendarioFinalizados = computed(() => partidosCalendario.value.filter(p => p.estado === 'Finalizado'))
+
+const filtrosCalendario = computed(() => [
+    { nombre: 'Todas', icono: '🗂️' },
+    ...categorias
+])
+
+const totalEquipos = computed(() => equipos.value.length)
+
+// Helpers
+const obtenerLogo = (nombreEquipo) => {
+    const eq = equipos.value.find(e => e.nombre === nombreEquipo)
+    return eq ? eq.url_logo : null
+}
+
+const irARegistro = () => router.push('/registro-jugador')
+const irALogin = () => router.push('/login')
 </script>
 
 <template>
@@ -92,14 +122,56 @@ onMounted(() => {
                         <div class="bg-[#001a4d] text-white p-4">
                             <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">📊</span> Tablas de Posiciones</h3>
                         </div>
+                        
+                        <!-- Selectores de Categoría de tu diseño -->
                         <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                            <div v-for="cat in categorias" :key="cat.id" @click="verCategoria(cat.nombre)" class="border border-gray-200 hover:border-[#001a4d] bg-gray-50 rounded-xl p-6 cursor-pointer transition flex items-center group shadow-sm hover:shadow-md">
+                            <div v-for="cat in categorias" :key="cat.id" @click="verCategoria(cat.nombre)" 
+                                 :class="categoriaSeleccionada === cat.nombre ? 'border-[#001a4d] bg-blue-50 shadow-md ring-2 ring-[#001a4d] ring-opacity-20' : 'border-gray-200 bg-gray-50 hover:shadow-md'"
+                                 class="border rounded-xl p-6 cursor-pointer transition flex items-center group">
                                 <div class="text-4xl mr-4 group-hover:scale-110 transition">{{ cat.icono }}</div>
                                 <div>
                                     <h4 class="text-2xl font-black text-[#001a4d]">{{ cat.nombre }}</h4>
                                     <p class="text-blue-600 font-bold text-sm mt-1 group-hover:underline">Ver clasificación →</p>
                                 </div>
                             </div>
+                        </div>
+
+                        <!-- TABLA DE POSICIONES MOSTRADA DEBAJO -->
+                        <div class="px-6 pb-6 overflow-x-auto">
+                            <h4 class="font-bold text-[#001a4d] mb-3 text-lg border-b pb-2">Clasificación Serie {{ categoriaSeleccionada }}</h4>
+                            <table class="w-full text-left text-sm border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-100 text-gray-700 font-black">
+                                        <th class="p-2 text-center border-b">Pos</th>
+                                        <th class="p-2 border-b">Club</th>
+                                        <th class="p-2 text-center border-b">PJ</th>
+                                        <th class="p-2 text-center border-b text-green-600">PG</th>
+                                        <th class="p-2 text-center border-b text-gray-500">PE</th>
+                                        <th class="p-2 text-center border-b text-red-500">PP</th>
+                                        <th class="p-2 text-center border-b">GD</th>
+                                        <th class="p-2 text-center border-b bg-blue-50 text-blue-900">PTS</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(pos, idx) in tablaPosiciones" :key="pos.id_equipo" class="border-b hover:bg-gray-50">
+                                        <td class="p-2 text-center font-bold text-gray-500">{{ idx + 1 }}</td>
+                                        <td class="p-2 font-black text-[#001a4d] flex items-center space-x-2">
+                                            <img v-if="pos.url_logo" :src="pos.url_logo" class="h-5 w-5 object-contain rounded-full" />
+                                            <div v-else class="h-5 w-5 bg-gray-200 rounded-full flex items-center justify-center text-[8px]">🛡️</div>
+                                            <span class="truncate">{{ pos.nombre }}</span>
+                                        </td>
+                                        <td class="p-2 text-center font-mono">{{ pos.pj }}</td>
+                                        <td class="p-2 text-center font-mono text-green-600 font-bold">{{ pos.pg }}</td>
+                                        <td class="p-2 text-center font-mono text-gray-500">{{ pos.pe }}</td>
+                                        <td class="p-2 text-center font-mono text-red-500">{{ pos.pp }}</td>
+                                        <td class="p-2 text-center font-mono font-bold" :class="pos.gd >= 0 ? 'text-blue-600' : 'text-red-500'">{{ pos.gd }}</td>
+                                        <td class="p-2 text-center font-mono font-black bg-blue-50 text-blue-900">{{ pos.pts }}</td>
+                                    </tr>
+                                    <tr v-if="tablaPosiciones.length === 0">
+                                        <td colspan="8" class="p-6 text-center text-gray-400 italic">No hay datos registrados aún.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
                         </div>
                     </div>
 
@@ -118,14 +190,14 @@ onMounted(() => {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr v-for="(gol, index) in goleadores" :key="gol.id" class="border-b hover:bg-gray-50 transition">
+                                    <tr v-for="(gol, index) in goleadores" :key="index" class="border-b hover:bg-gray-50 transition">
                                         <td class="p-4 flex items-center">
                                             <span class="font-black text-gray-400 w-6">{{ index + 1 }}.</span>
-                                            <span class="font-bold text-[#001a4d]">{{ gol.nombre }}</span>
+                                            <span class="font-bold text-[#001a4d]">{{ gol.jugador }}</span>
                                         </td>
                                         <td class="p-4 text-sm text-gray-600 font-medium">{{ gol.equipo }}</td>
                                         <td class="p-4">
-                                            <span class="bg-blue-50 text-[#001a4d] border border-blue-200 text-[10px] font-bold px-2 py-1 rounded-full uppercase">{{ gol.categoria }}</span>
+                                            <span class="bg-blue-50 text-[#001a4d] border border-blue-200 text-[10px] font-bold px-2 py-1 rounded-full uppercase">{{ categoriaSeleccionada }}</span>
                                         </td>
                                         <td class="p-4 text-center font-black text-xl text-yellow-500">{{ gol.goles }}</td>
                                     </tr>
@@ -138,30 +210,62 @@ onMounted(() => {
                     </div>
 
                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
-                        <div class="bg-[#001a4d] border-b p-4 flex justify-between items-center text-white">
-                            <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🏟️</span> Próxima Fecha</h3>
-                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-2 py-1 rounded uppercase tracking-wider shadow-sm">Jornada Activa</span>
+                        <div class="bg-[#001a4d] border-b p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-white">
+                            <div>
+                                <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🏟️</span> Calendario Oficial</h3>
+                                <p class="text-[11px] text-blue-100 mt-1">Filtra por categoría y revisa resultados de partidos ya disputados.</p>
+                            </div>
+                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">Total: {{ partidosCalendario.length }}</span>
+                        </div>
+
+                        <div class="p-4 border-b bg-gray-50 flex flex-wrap gap-2">
+                            <button v-for="filtro in filtrosCalendario" :key="filtro.nombre" @click="filtroCalendario = filtro.nombre"
+                                    :class="filtroCalendario === filtro.nombre ? 'bg-[#001a4d] text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:border-[#001a4d] hover:text-[#001a4d]'"
+                                    class="px-4 py-2 rounded-full text-xs font-black transition flex items-center gap-2">
+                                <span>{{ filtro.icono }}</span>
+                                <span>{{ filtro.nombre }}</span>
+                            </button>
                         </div>
                         
-                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto">
-                            <div v-for="partido in partidos" :key="partido.id" @click="abrirDetallePartido(partido.id)" class="bg-gray-50 border border-gray-200 rounded-lg p-4 cursor-pointer hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
-                                <div class="text-center mb-3 border-b border-gray-200 pb-2">
-                                    <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">{{ partido.fecha }} • {{ partido.hora }}</p>
+                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[440px] overflow-y-auto">
+                            <article v-for="partido in partidosCalendario" :key="partido.id_partido" class="bg-gray-50 border border-gray-200 rounded-2xl p-4 hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
+                                <div class="text-center mb-3 border-b border-gray-200 pb-2 flex items-center justify-between gap-2">
+                                    <p class="text-xs text-gray-500 font-black uppercase tracking-wider">📅 {{ partido.fecha }} • ⏰ {{ partido.hora }}</p>
+                                    <span :class="partido.estado === 'Finalizado' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-yellow-100 text-yellow-800 border-yellow-200'" class="px-2 py-1 rounded-full border text-[10px] font-black uppercase tracking-widest">{{ partido.estado }}</span>
                                 </div>
                                 <div class="flex justify-between items-center">
-                                    <div class="text-center w-[40%]">
+                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
+                                        <img v-if="obtenerLogo(partido.local)" :src="obtenerLogo(partido.local)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
+                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
                                         <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.local }}</p>
                                     </div>
                                     <div class="w-[20%] text-center">
-                                        <span class="text-[10px] font-black bg-gray-200 text-gray-500 px-2 py-1 rounded">VS</span>
+                                        <span class="text-[10px] font-black bg-[#001a4d] text-yellow-400 px-2 py-1 rounded shadow-inner">VS</span>
                                     </div>
-                                    <div class="text-center w-[40%]">
+                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
+                                        <img v-if="obtenerLogo(partido.visitante)" :src="obtenerLogo(partido.visitante)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
+                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
                                         <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.visitante }}</p>
                                     </div>
                                 </div>
-                                <p class="text-[10px] text-center text-blue-500 font-semibold mt-3">Ver detalles del partido →</p>
+                                <div class="mt-4 flex items-center justify-between gap-3">
+                                    <span class="text-[10px] font-black uppercase tracking-wider text-gray-500">{{ partido.categoria_local || partido.categoria_visitante || 'Sin categoría' }}</span>
+                                    <span v-if="partido.estado === 'Finalizado'" class="bg-green-600 text-white font-black px-3 py-1 rounded-xl text-xs shadow-sm">{{ partido.goles_local }} - {{ partido.goles_visitante }}</span>
+                                    <span v-else class="bg-[#001a4d] text-yellow-400 font-black px-3 py-1 rounded-xl text-xs shadow-sm">Pendiente</span>
+                                </div>
+                            </article>
+                            <div v-if="partidosCalendario.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos para mostrar con este filtro.</div>
+                        </div>
+
+                        <div class="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div class="rounded-2xl bg-blue-50 border border-blue-100 p-4 flex items-center justify-between">
+                                <span class="text-xs font-black uppercase tracking-wider text-blue-700">Pendientes</span>
+                                <span class="text-xl font-black text-[#001a4d]">{{ partidosCalendarioPendientes.length }}</span>
                             </div>
-                            <div v-if="partidos.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos programados para este fin de semana.</div>
+                            <div class="rounded-2xl bg-green-50 border border-green-100 p-4 flex items-center justify-between">
+                                <span class="text-xs font-black uppercase tracking-wider text-green-700">Finalizados</span>
+                                <span class="text-xl font-black text-[#001a4d]">{{ partidosCalendarioFinalizados.length }}</span>
+                            </div>
                         </div>
                     </div>
 
@@ -178,7 +282,7 @@ onMounted(() => {
                         <div class="p-6 flex flex-col space-y-4">
                             <div class="flex justify-between items-center border-b border-gray-100 pb-2">
                                 <span class="text-gray-500 font-bold text-xs uppercase">Categorías</span>
-                                <span class="text-2xl font-black text-[#001a4d]">{{ estadisticasExtra.categorias }}</span>
+                                <span class="text-2xl font-black text-[#001a4d]">2</span>
                             </div>
                             <div class="flex justify-between items-center border-b border-gray-100 pb-2">
                                 <span class="text-gray-500 font-bold text-xs uppercase">Equipos</span>
@@ -189,7 +293,10 @@ onMounted(() => {
                             </div>
                             <div class="flex justify-between items-center">
                                 <span class="text-gray-500 font-bold text-xs uppercase">Jugadores</span>
-                                <span class="text-2xl font-black text-[#001a4d]">{{ estadisticasExtra.jugadores }}</span>
+                                <span class="text-2xl font-black text-[#001a4d]">
+                                    <span v-if="cargando" class="animate-pulse text-gray-300">...</span>
+                                    <span v-else>{{ totalJugadores }}</span>
+                                </span>
                             </div>
                         </div>
                     </div>
@@ -199,13 +306,9 @@ onMounted(() => {
                             <h3 class="text-sm font-black uppercase flex items-center"><span class="mr-2">📄</span> Documentos</h3>
                         </div>
                         <div class="p-4 space-y-3">
-                            <a href="#" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
+                            <a href="/reglamento.pdf" target="_blank" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
                                 <span class="text-xl mr-3 grayscale group-hover:grayscale-0 transition">📑</span>
                                 <span class="font-bold text-xs text-gray-600 group-hover:text-[#001a4d]">Reglamento General 2026</span>
-                            </a>
-                            <a href="#" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
-                                <span class="text-xl mr-3 grayscale group-hover:grayscale-0 transition">📑</span>
-                                <span class="font-bold text-xs text-gray-600 group-hover:text-[#001a4d]">Cronograma de Vocalías</span>
                             </a>
                         </div>
                     </div>
@@ -253,19 +356,3 @@ onMounted(() => {
 
     </div>
 </template>
-
-<style scoped>
-::-webkit-scrollbar {
-    width: 6px;
-}
-::-webkit-scrollbar-track {
-    background: transparent; 
-}
-::-webkit-scrollbar-thumb {
-    background: #cbd5e1; 
-    border-radius: 10px;
-}
-::-webkit-scrollbar-thumb:hover {
-    background: #001a4d; 
-}
-</style>

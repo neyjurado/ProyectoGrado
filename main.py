@@ -1,10 +1,36 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
+import os
+import re
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta
 from typing import Optional, List
 from database import get_db_connection
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_service import upload_image_to_firebase
+
+FIXTURE_PASSWORD_FILE = os.path.join(os.path.dirname(__file__), "fixture_password.txt")
+
+def _load_fixture_password() -> str:
+    env_password = os.getenv("FIXTURE_PASSWORD", "").strip()
+    if env_password:
+        return env_password
+    if os.path.exists(FIXTURE_PASSWORD_FILE):
+        try:
+            with open(FIXTURE_PASSWORD_FILE, "r", encoding="utf-8") as fh:
+                password = fh.read().strip()
+                if password:
+                    return password
+        except Exception:
+            pass
+    return "LDPConocoto2024"
+
+
+def _save_fixture_password(password: str) -> None:
+    with open(FIXTURE_PASSWORD_FILE, "w", encoding="utf-8") as fh:
+        fh.write(password)
+
+
+FIXTURE_PASSWORD = _load_fixture_password()
 
 app = FastAPI(
     title="API Liga Conocoto",
@@ -47,6 +73,7 @@ class UsuarioRegistro(BaseModel):
 class ArbitroCrear(BaseModel):
     nombre: str
     apellido: str
+    cedula: Optional[str] = None
     experiencia_anios: Optional[int] = None
     url_foto: Optional[str] = None
 
@@ -56,11 +83,17 @@ class UsuarioLogin(BaseModel):
 
 class GenerarCalendarioRequest(BaseModel):
     fecha_inicio: date
+    password: str
+
+class FixturePasswordRequest(BaseModel):
+    password: str
 
 class PartidoActualizar(BaseModel):
     fecha: str
     hora: str
     id_arbitro: Optional[int] = None
+    id_arbitro_2: Optional[int] = None
+    id_arbitro_3: Optional[int] = None
 
 class IncidenciaJugadorRequest(BaseModel):
     id_jugador: int
@@ -72,6 +105,7 @@ class FinalizarPartidoRequest(BaseModel):
     goles_local: int
     goles_visitante: int
     novedades: Optional[str] = None
+    foto_vocalia_url: Optional[str] = None
     incidencias: List[IncidenciaJugadorRequest]
 
 class TraspasoRequest(BaseModel):
@@ -80,6 +114,9 @@ class TraspasoRequest(BaseModel):
 
 class CategoriaRequest(BaseModel):
     nueva_categoria: str
+
+class SuspensionRequest(BaseModel):
+    motivo: Optional[str] = None
 
 # NUEVOS MODELOS PARA EL DASHBOARD DEL JUGADOR
 class AsistenciaRequest(BaseModel):
@@ -92,6 +129,74 @@ class CalificacionArbitro(BaseModel):
     id_jugador: int
     id_partido: int
     puntaje: int
+
+
+def validar_password_segura(password: str) -> str:
+    texto = (password or '').strip()
+    if len(texto) < 8:
+        return 'La contraseña debe tener al menos 8 caracteres.'
+    if not re.search(r'[A-Z]', texto):
+        return 'La contraseña debe incluir al menos una mayúscula.'
+    if not re.search(r'[a-z]', texto):
+        return 'La contraseña debe incluir al menos una minúscula.'
+    if not re.search(r'\d', texto):
+        return 'La contraseña debe incluir al menos un número.'
+    if not re.search(r'[^\w\s]', texto):
+        return 'La contraseña debe incluir al menos un carácter especial.'
+    return ''
+
+
+def normalizar_correo(correo: str) -> str:
+    return (correo or '').strip().lower()
+
+
+def validar_fecha_nacimiento_max_100(fecha_nacimiento: date) -> str:
+    hoy = date.today()
+    if fecha_nacimiento > hoy:
+        return 'La fecha de nacimiento no puede ser futura.'
+    edad = hoy.year - fecha_nacimiento.year - ((hoy.month, hoy.day) < (fecha_nacimiento.month, fecha_nacimiento.day))
+    if edad > 100:
+        return 'La fecha de nacimiento no puede superar los 100 años.'
+    return ''
+
+
+def validar_fecha_fundacion_equipo(fecha_fundacion: Optional[date]) -> str:
+    if fecha_fundacion is None:
+        return ''
+    hoy = date.today()
+    if fecha_fundacion > hoy:
+        return 'La fecha de fundación no puede ser futura.'
+    if fecha_fundacion > hoy - timedelta(days=30):
+        return 'La fecha de fundación debe tener al menos un mes de antigüedad.'
+    return ''
+
+
+def validar_arbitros_distintos(partido: PartidoActualizar) -> str:
+    ids = [partido.id_arbitro, partido.id_arbitro_2, partido.id_arbitro_3]
+    ids_limpios = [valor for valor in ids if valor is not None]
+    if len(ids_limpios) != len(set(ids_limpios)):
+        return 'Los tres árbitros del partido deben ser distintos.'
+    return ''
+
+
+def validar_incidencias_vocalia(req: FinalizarPartidoRequest) -> str:
+    if req.goles_local < 0 or req.goles_visitante < 0:
+        return 'Los goles no pueden ser negativos.'
+    for inc in req.incidencias:
+        if inc.goles < 0:
+            return 'Los goles por jugador no pueden ser negativos.'
+        if inc.amarillas < 0 or inc.amarillas > 2:
+            return 'Las tarjetas amarillas por jugador deben estar entre 0 y 2.'
+        if inc.rojas < 0 or inc.rojas > 1:
+            return 'Las tarjetas rojas por jugador deben estar entre 0 y 1.'
+    return ''
+
+
+def limpiar_fixture(cursor) -> None:
+    cursor.execute('DELETE FROM Calificaciones_Arbitros')
+    cursor.execute('DELETE FROM Asistencia')
+    cursor.execute('DELETE FROM Estadisticas_Jugadores')
+    cursor.execute('DELETE FROM Partidos')
 
 # ---------------------------------------------------------
 # 2. RUTAS DE LA API - PANEL ADMINISTRADOR (INTACTAS)
@@ -116,6 +221,9 @@ def crear_equipo(equipo: EquipoCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
+        if validacion_fecha:
+            raise HTTPException(status_code=400, detail=validacion_fecha)
         cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ?", (equipo.nombre_equipo,))
         if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe un equipo registrado con ese nombre exacto.")
         cursor.execute("INSERT INTO Equipos (Nombre_Equipo, Fecha_Fundacion, Categoria, Url_Logo) VALUES (?, ?, ?, ?)", (equipo.nombre_equipo, equipo.fecha_fundacion, equipo.categoria, equipo.url_logo))
@@ -130,6 +238,9 @@ def actualizar_equipo(id_equipo: int, equipo: EquipoCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
+        if validacion_fecha:
+            raise HTTPException(status_code=400, detail=validacion_fecha)
         cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ? AND Id_Equipo <> ?", (equipo.nombre_equipo, id_equipo))
         if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe otro equipo registrado con ese nombre.")
         cursor.execute("UPDATE Equipos SET Nombre_Equipo = ?, Categoria = ?, Fecha_Fundacion = ?, Url_Logo = ? WHERE Id_Equipo = ?", (equipo.nombre_equipo, equipo.categoria, equipo.fecha_fundacion, equipo.url_logo, id_equipo))
@@ -160,8 +271,11 @@ def obtener_jugadores():
     try:
         cursor.execute("""
             SELECT j.Id_Jugador, j.Cedula, j.Nombre, j.Apellido, j.Fecha_Nacimiento, j.Numero_Camiseta, j.Url_Foto, 
-                   j.Id_Equipo, e.Nombre_Equipo, j.Url_Documento, e.Categoria
-            FROM Jugadores j LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo ORDER BY j.Id_Jugador DESC
+                   j.Id_Equipo, e.Nombre_Equipo, j.Url_Documento, e.Categoria, s.Fecha_Fin, s.Motivo
+            FROM Jugadores j
+            LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo
+            LEFT JOIN Suspensiones_Jugadores s ON j.Id_Jugador = s.Id_Jugador AND s.Activa = 1 AND s.Fecha_Fin >= CAST(GETDATE() AS DATE)
+            ORDER BY j.Id_Jugador DESC
         """)
         lista_jugadores = []
         for row in cursor.fetchall():
@@ -169,7 +283,8 @@ def obtener_jugadores():
                 "id_jugador": row.Id_Jugador, "cedula": row.Cedula, "nombre": row.Nombre, "apellido": row.Apellido,
                 "fecha_nacimiento": row.Fecha_Nacimiento, "numero_camiseta": row.Numero_Camiseta,
                 "url_foto": row.Url_Foto, "id_equipo": row.Id_Equipo, "nombre_equipo": row.Nombre_Equipo,
-                "categoria_equipo": row.Categoria, "url_documento": row.Url_Documento if hasattr(row, 'Url_Documento') else ''
+                "categoria_equipo": row.Categoria, "url_documento": row.Url_Documento if hasattr(row, 'Url_Documento') else '',
+                "suspendido_hasta": row.Fecha_Fin if hasattr(row, 'Fecha_Fin') else None, "motivo_suspension": row.Motivo if hasattr(row, 'Motivo') else ''
             })
         return lista_jugadores
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
@@ -180,6 +295,12 @@ def crear_jugador(jugador: JugadorCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_fecha = validar_fecha_nacimiento_max_100(jugador.fecha_nacimiento)
+        if validacion_fecha:
+            raise HTTPException(status_code=400, detail=validacion_fecha)
+        cursor.execute("SELECT 1 FROM Arbitros WHERE Cedula = ?", (jugador.cedula,))
+        if cursor.fetchone():
+            raise HTTPException(status_code=400, detail="No se puede registrar un jugador con una cédula que ya pertenece a un árbitro.")
         cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Id_Equipo = ? AND Numero_Camiseta = ?", (jugador.id_equipo, jugador.numero_camiseta))
         if cursor.fetchone(): raise HTTPException(status_code=400, detail=f"¡Error! La camiseta #{jugador.numero_camiseta} ya está asignada.")
         cursor.execute("""
@@ -191,7 +312,7 @@ def crear_jugador(jugador: JugadorCrear):
     except HTTPException: raise 
     except Exception as e:
         conn.rollback()
-        if 'UNIQUE KEY constraint' in str(e): raise HTTPException(status_code=400, detail="Este documento de identidad ya está registrado.")
+        if 'UNIQUE KEY constraint' in str(e): raise HTTPException(status_code=400, detail="La cédula ya está registrada en otro jugador.")
         raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
 
@@ -228,8 +349,8 @@ def obtener_arbitros():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT Id_Arbitro, Nombre, Apellido, Experiencia_Anios, Url_Foto FROM Arbitros ORDER BY Id_Arbitro DESC")
-        return [{"id_arbitro": r.Id_Arbitro, "nombre": r.Nombre, "apellido": r.Apellido, "experiencia_anios": r.Experiencia_Anios, "url_foto": r.Url_Foto} for r in cursor.fetchall()]
+        cursor.execute("SELECT Id_Arbitro, Nombre, Apellido, Cedula, Experiencia_Anios, Url_Foto FROM Arbitros ORDER BY Id_Arbitro DESC")
+        return [{"id_arbitro": r.Id_Arbitro, "nombre": r.Nombre, "apellido": r.Apellido, "cedula": r.Cedula, "experiencia_anios": r.Experiencia_Anios, "url_foto": r.Url_Foto} for r in cursor.fetchall()]
     finally: conn.close()
 
 @app.post("/arbitros")
@@ -237,11 +358,49 @@ def crear_arbitro(arbitro: ArbitroCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO Arbitros (Nombre, Apellido, Experiencia_Anios, Url_Foto) VALUES (?, ?, ?, ?)", (arbitro.nombre, arbitro.apellido, arbitro.experiencia_anios, arbitro.url_foto))
+        cedula = arbitro.cedula.strip() if arbitro.cedula else None
+        if cedula:
+            cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Cedula = ?", (cedula,))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="No se puede registrar un árbitro con una cédula que ya pertenece a un jugador.")
+            cursor.execute("SELECT Id_Arbitro FROM Arbitros WHERE Cedula = ?", (cedula,))
+            if cursor.fetchone():
+                raise HTTPException(status_code=400, detail="Ya existe un árbitro registrado con esa cédula.")
+        cursor.execute("INSERT INTO Arbitros (Nombre, Apellido, Cedula, Experiencia_Anios, Url_Foto) VALUES (?, ?, ?, ?, ?)", (arbitro.nombre, arbitro.apellido, cedula, arbitro.experiencia_anios, arbitro.url_foto))
         conn.commit()
         return {"mensaje": f"Árbitro {arbitro.nombre} registrado exitosamente."}
+    except HTTPException: raise
     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
+
+@app.post("/config/fixture-password")
+def configurar_password_fixture(req: FixturePasswordRequest):
+    global FIXTURE_PASSWORD
+    if not req.password or not req.password.strip():
+        raise HTTPException(status_code=400, detail="La contraseña no puede estar vacía.")
+    password = req.password.strip()
+    FIXTURE_PASSWORD = password
+    _save_fixture_password(password)
+    return {"mensaje": "Contraseña del fixture actualizada."}
+
+
+@app.delete("/partidos/fixture")
+def borrar_fixture(req: FixturePasswordRequest = Body(...)):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        if req.password != FIXTURE_PASSWORD:
+            raise HTTPException(status_code=401, detail="Contraseña incorrecta para borrar el fixture.")
+        limpiar_fixture(cursor)
+        conn.commit()
+        return {"mensaje": "Fixture eliminado correctamente."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
 
 @app.get("/partidos")
 def obtener_partidos():
@@ -249,25 +408,35 @@ def obtener_partidos():
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT p.Id_Partido, p.Fecha_Hora, p.Estado, p.Goles_Local, p.Goles_Visitante, p.Id_Arbitro,
-                   el.Nombre_Equipo AS Local, ev.Nombre_Equipo AS Visitante,
-                   a.Nombre AS Arbitro_Nombre, a.Apellido AS Arbitro_Apellido
+                 SELECT p.Id_Partido, p.Fecha_Hora, p.Estado, p.Goles_Local, p.Goles_Visitante, p.Id_Arbitro, p.Id_Arbitro_2, p.Id_Arbitro_3,
+                     el.Nombre_Equipo AS Local, el.Categoria AS Categoria_Local,
+                     ev.Nombre_Equipo AS Visitante, ev.Categoria AS Categoria_Visitante,
+                   a1.Nombre AS Arbitro1_Nombre, a1.Apellido AS Arbitro1_Apellido,
+                   a2.Nombre AS Arbitro2_Nombre, a2.Apellido AS Arbitro2_Apellido,
+                   a3.Nombre AS Arbitro3_Nombre, a3.Apellido AS Arbitro3_Apellido
             FROM Partidos p
             INNER JOIN Equipos el ON p.Id_Equipo_Local = el.Id_Equipo
             INNER JOIN Equipos ev ON p.Id_Equipo_Visitante = ev.Id_Equipo
-            LEFT JOIN Arbitros a ON p.Id_Arbitro = a.Id_Arbitro
+            LEFT JOIN Arbitros a1 ON p.Id_Arbitro = a1.Id_Arbitro
+            LEFT JOIN Arbitros a2 ON p.Id_Arbitro_2 = a2.Id_Arbitro
+            LEFT JOIN Arbitros a3 ON p.Id_Arbitro_3 = a3.Id_Arbitro
             ORDER BY p.Fecha_Hora ASC
         """)
         partidos = []
         for r in cursor.fetchall():
-            arbitro_str = f"{r.Arbitro_Nombre} {r.Arbitro_Apellido}" if r.Arbitro_Nombre else "Sin asignar"
+            arbitros_partido = [f"{r.Arbitro1_Nombre} {r.Arbitro1_Apellido}" if r.Arbitro1_Nombre else None,
+                                f"{r.Arbitro2_Nombre} {r.Arbitro2_Apellido}" if r.Arbitro2_Nombre else None,
+                                f"{r.Arbitro3_Nombre} {r.Arbitro3_Apellido}" if r.Arbitro3_Nombre else None]
+            arbitro_str = " / ".join([a for a in arbitros_partido if a]) or "Sin asignar"
             partidos.append({
                 "id_partido": r.Id_Partido, "local": r.Local, "visitante": r.Visitante,
+                "categoria_local": r.Categoria_Local, "categoria_visitante": r.Categoria_Visitante,
                 "fecha": r.Fecha_Hora.strftime("%Y-%m-%d") if r.Fecha_Hora else "",
                 "hora": r.Fecha_Hora.strftime("%H:%M") if r.Fecha_Hora else "",
                 "goles_local": r.Goles_Local if r.Goles_Local is not None else 0,
                 "goles_visitante": r.Goles_Visitante if r.Goles_Visitante is not None else 0,
-                "estado": r.Estado, "arbitro": arbitro_str, "id_arbitro": r.Id_Arbitro
+                "estado": r.Estado, "arbitro": arbitro_str, "id_arbitro": r.Id_Arbitro,
+                "id_arbitro_2": r.Id_Arbitro_2, "id_arbitro_3": r.Id_Arbitro_3
             })
         return partidos
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
@@ -278,17 +447,23 @@ def actualizar_partido(id_partido: int, partido: PartidoActualizar):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_arbitros = validar_arbitros_distintos(partido)
+        if validacion_arbitros:
+            raise HTTPException(status_code=400, detail=validacion_arbitros)
         fecha_hora_str = f"{partido.fecha} {partido.hora}"
         fecha_hora_dt = datetime.strptime(fecha_hora_str, "%Y-%m-%d %H:%M")
         cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Fecha_Hora = ? AND Id_Partido <> ?", (fecha_hora_dt, id_partido))
         if cursor.fetchone().total > 0: raise HTTPException(status_code=400, detail="¡Conflicto de Horario! Ya existe otro partido programado en esa misma fecha y hora.")
-        cursor.execute("UPDATE Partidos SET Fecha_Hora = ?, Id_Arbitro = ? WHERE Id_Partido = ?", (fecha_hora_dt, partido.id_arbitro, id_partido))
+        cursor.execute("UPDATE Partidos SET Fecha_Hora = ?, Id_Arbitro = ?, Id_Arbitro_2 = ?, Id_Arbitro_3 = ? WHERE Id_Partido = ?", (fecha_hora_dt, partido.id_arbitro, partido.id_arbitro_2, partido.id_arbitro_3, id_partido))
         conn.commit()
         return {"mensaje": "El partido ha sido reprogramado con éxito."}
     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
 
 def calcular_si_esta_suspendido(cursor, id_jugador: int, id_equipo: int) -> bool:
+    cursor.execute("SELECT TOP 1 1 FROM Suspensiones_Jugadores WHERE Id_Jugador = ? AND Activa = 1 AND Fecha_Fin >= CAST(GETDATE() AS DATE)", (id_jugador,))
+    if cursor.fetchone():
+        return True
     cursor.execute("""
         SELECT p.Id_Partido, ISNULL(ej.Tarjetas_Amarillas, 0) as A, ISNULL(ej.Tarjetas_Rojas, 0) as R
         FROM Partidos p LEFT JOIN Estadisticas_Jugadores ej ON p.Id_Partido = ej.Id_Partido AND ej.Id_Jugador = ?
@@ -329,7 +504,10 @@ def finalizar_partido(id_partido: int, req: FinalizarPartidoRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE Partidos SET Goles_Local = ?, Goles_Visitante = ?, Estado = 'Finalizado', Novedades = ? WHERE Id_Partido = ?", (req.goles_local, req.goles_visitante, req.novedades, id_partido))
+        validacion = validar_incidencias_vocalia(req)
+        if validacion:
+            raise HTTPException(status_code=400, detail=validacion)
+        cursor.execute("UPDATE Partidos SET Goles_Local = ?, Goles_Visitante = ?, Estado = 'Finalizado', Novedades = ?, Url_Foto_Vocalia = ? WHERE Id_Partido = ?", (req.goles_local, req.goles_visitante, req.novedades, req.foto_vocalia_url, id_partido))
         for inc in req.incidencias:
             if inc.goles > 0 or inc.amarillas > 0 or inc.rojas > 0:
                 cursor.execute("INSERT INTO Estadisticas_Jugadores (Id_Jugador, Id_Partido, Goles, Tarjetas_Amarillas, Tarjetas_Rojas) VALUES (?, ?, ?, ?, ?)", (inc.id_jugador, id_partido, inc.goles, inc.amarillas, inc.rojas))
@@ -343,7 +521,7 @@ def obtener_detalles_acta(id_partido: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT Novedades, Id_Equipo_Local, Id_Equipo_Visitante FROM Partidos WHERE Id_Partido = ?", (id_partido,))
+        cursor.execute("SELECT Novedades, Id_Equipo_Local, Id_Equipo_Visitante, Url_Foto_Vocalia FROM Partidos WHERE Id_Partido = ?", (id_partido,))
         partido = cursor.fetchone()
         cursor.execute("""
             SELECT j.Nombre, j.Apellido, j.Id_Equipo, ej.Goles, ej.Tarjetas_Amarillas, ej.Tarjetas_Rojas
@@ -360,6 +538,7 @@ def obtener_detalles_acta(id_partido: int):
 
         return {
             "novedades": partido.Novedades if hasattr(partido, 'Novedades') and partido.Novedades else "Ninguna novedad registrada durante el encuentro.",
+            "foto_vocalia_url": partido.Url_Foto_Vocalia if hasattr(partido, 'Url_Foto_Vocalia') and partido.Url_Foto_Vocalia else None,
             "incidencias_local": incidencias_local, "incidencias_visitante": incidencias_visitante
         }
     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
@@ -414,6 +593,9 @@ def realizar_traspaso_jugador(id_jugador: int, req: TraspasoRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Estado <> 'Finalizado'")
+        if cursor.fetchone().total > 0:
+            raise HTTPException(status_code=400, detail="Los traspasos quedan bloqueados hasta que se jueguen todos los partidos del torneo.")
         cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Id_Equipo = ? AND Numero_Camiseta = ?", (req.id_nuevo_equipo, req.nuevo_numero_camiseta))
         if cursor.fetchone(): raise HTTPException(status_code=400, detail=f"¡Conflicto de dorsal! El número #{req.nuevo_numero_camiseta} ya está ocupado en ese equipo.")
         cursor.execute("UPDATE Jugadores SET Id_Equipo = ?, Numero_Camiseta = ? WHERE Id_Jugador = ?", (req.id_nuevo_equipo, req.nuevo_numero_camiseta, id_jugador))
@@ -428,6 +610,9 @@ def cambiar_categoria_equipo(id_equipo: int, req: CategoriaRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Estado <> 'Finalizado'")
+        if cursor.fetchone().total > 0:
+            raise HTTPException(status_code=400, detail="Los cambios de categoría quedan bloqueados hasta que se completen todos los partidos.")
         cursor.execute("UPDATE Equipos SET Categoria = ? WHERE Id_Equipo = ?", (req.nueva_categoria, id_equipo))
         conn.commit()
         return {"mensaje": "Categoría modificada correctamente."}
@@ -464,7 +649,9 @@ def generar_calendario(req: GenerarCalendarioRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("DELETE FROM Partidos")
+        if req.password != FIXTURE_PASSWORD:
+            raise HTTPException(status_code=401, detail="Contraseña incorrecta para generar el fixture.")
+        limpiar_fixture(cursor)
         p_primera = generar_round_robin_por_categoria(cursor, "Primera", req.fecha_inicio)
         p_maxima = generar_round_robin_por_categoria(cursor, "Máxima", req.fecha_inicio + timedelta(days=1))
         todos = p_primera + p_maxima
@@ -474,12 +661,54 @@ def generar_calendario(req: GenerarCalendarioRequest):
         return {"mensaje": f"¡Torneo unificado generado! {len(todos)} partidos cargados."}
     finally: conn.close()
 
+@app.get("/jugadores/suspendidos")
+def obtener_jugadores_suspendidos():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT j.Id_Jugador, j.Nombre, j.Apellido, j.Cedula, e.Nombre_Equipo, s.Fecha_Inicio, s.Fecha_Fin, s.Motivo
+            FROM Suspensiones_Jugadores s
+            INNER JOIN Jugadores j ON s.Id_Jugador = j.Id_Jugador
+            LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo
+            WHERE s.Activa = 1 AND s.Fecha_Fin >= CAST(GETDATE() AS DATE)
+            ORDER BY s.Fecha_Fin DESC
+        """)
+        return [{"id_jugador": r.Id_Jugador, "nombre": r.Nombre, "apellido": r.Apellido, "cedula": r.Cedula, "equipo": r.Nombre_Equipo, "fecha_inicio": r.Fecha_Inicio, "fecha_fin": r.Fecha_Fin, "motivo": r.Motivo} for r in cursor.fetchall()]
+    finally: conn.close()
+
+@app.post("/jugadores/{id_jugador}/suspender")
+def suspender_jugador(id_jugador: int, req: SuspensionRequest):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        fecha_inicio = date.today()
+        fecha_fin = fecha_inicio + timedelta(days=365)
+        cursor.execute("UPDATE Suspensiones_Jugadores SET Activa = 0 WHERE Id_Jugador = ?", (id_jugador,))
+        cursor.execute("INSERT INTO Suspensiones_Jugadores (Id_Jugador, Fecha_Inicio, Fecha_Fin, Motivo, Activa) VALUES (?, ?, ?, ?, 1)", (id_jugador, fecha_inicio, fecha_fin, req.motivo))
+        conn.commit()
+        return {"mensaje": "Jugador suspendido por un año correctamente."}
+    except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
+    finally: conn.close()
+
+@app.delete("/jugadores/{id_jugador}/suspender")
+def quitar_suspension_jugador(id_jugador: int):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("UPDATE Suspensiones_Jugadores SET Activa = 0 WHERE Id_Jugador = ?", (id_jugador,))
+        conn.commit()
+        return {"mensaje": "Suspensión removida correctamente."}
+    except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
+    finally: conn.close()
+
 @app.post("/login")
 def iniciar_sesion(credenciales: UsuarioLogin):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador FROM Usuarios WHERE Correo = ?", (credenciales.correo,))
+        correo_normalizado = normalizar_correo(credenciales.correo)
+        cursor.execute("SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador FROM Usuarios WHERE LOWER(Correo) = ?", (correo_normalizado,))
         u = cursor.fetchone()
         if not u or credenciales.password != u.Password_Hash: raise HTTPException(status_code=401, detail="Credenciales incorrectas")
         return {"usuario": {"id": u.Id_Usuario, "correo": u.Correo, "rol": u.Rol, "id_jugador": u.Id_Jugador if hasattr(u, 'Id_Jugador') else None}}
@@ -638,15 +867,20 @@ def registrar_usuario(req: UsuarioRegistro):
             raise HTTPException(status_code=400, detail="Este jugador ya tiene una cuenta registrada en el sistema.")
             
         # 3. Validar que el correo no esté en uso
-        cursor.execute("SELECT Id_Usuario FROM Usuarios WHERE Correo = ?", (req.correo,))
+        correo_normalizado = normalizar_correo(req.correo)
+        cursor.execute("SELECT Id_Usuario FROM Usuarios WHERE LOWER(Correo) = ?", (correo_normalizado,))
         if cursor.fetchone():
-            raise HTTPException(status_code=400, detail="Este correo electrónico ya está en uso.")
+            raise HTTPException(status_code=400, detail="Este correo electrónico ya está en uso, sin importar mayúsculas o minúsculas.")
+
+        validacion_password = validar_password_segura(req.password)
+        if validacion_password:
+            raise HTTPException(status_code=400, detail=validacion_password)
             
         # 4. Insertar en la tabla Usuarios vinculándolo con su Id_Jugador
         cursor.execute("""
             INSERT INTO Usuarios (Correo, Password_Hash, Rol, Id_Jugador)
             VALUES (?, ?, 'Jugador', ?)
-        """, (req.correo, req.password, id_jugador))
+        """, (correo_normalizado, req.password, id_jugador))
         conn.commit()
         
         return {"mensaje": f"¡Bienvenido {jugador.Nombre}! Tu cuenta ha sido creada exitosamente. Ya puedes iniciar sesión."}

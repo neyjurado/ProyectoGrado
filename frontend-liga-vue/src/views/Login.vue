@@ -8,6 +8,7 @@ const correo = ref('')
 const password = ref('')
 const cargando = ref(false)
 const mensajeError = ref('')
+const mostrarPassword = ref(false)
 
 const procesarLogin = async () => {
     if (!correo.value || !password.value) return;
@@ -93,14 +94,19 @@ const procesarLogin = async () => {
 
                         <div>
                             <label for="password" class="block text-sm font-semibold text-gray-700 mb-1">Contraseña</label>
-                            <input 
-                                v-model="password"
-                                type="password" 
-                                id="password" 
-                                class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
-                                placeholder="••••••••"
-                                required
-                            >
+                            <div class="relative">
+                                <input 
+                                    v-model="password"
+                                    :type="mostrarPassword ? 'text' : 'password'" 
+                                    id="password" 
+                                    class="w-full px-4 py-3 pr-12 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
+                                    placeholder="••••••••"
+                                    required
+                                >
+                                <button type="button" @click="mostrarPassword = !mostrarPassword" class="absolute inset-y-0 right-0 px-4 text-gray-500 hover:text-[#001a4d]" :aria-label="mostrarPassword ? 'Ocultar contraseña' : 'Ver contraseña'">
+                                    {{ mostrarPassword ? '🙈' : '👁️' }}
+                                </button>
+                            </div>
                         </div>
 
                         <button 

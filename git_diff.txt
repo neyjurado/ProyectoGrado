@@ -1,0 +1,2057 @@
+diff --git a/frontend-liga-vue/src/views/AdminDashboard.vue b/frontend-liga-vue/src/views/AdminDashboard.vue
+index 69d9461..c320d24 100644
+--- a/frontend-liga-vue/src/views/AdminDashboard.vue
++++ b/frontend-liga-vue/src/views/AdminDashboard.vue
+@@ -41,6 +41,9 @@ const docPreview = ref('')
+ const docSeleccionado = ref(null)
+ 
+ const datosCarnet = ref({ nombre: '', apellido: '', equipo: '', categoria: '', cedula: '', numero_camiseta: '', fotoBase64: '', logoEquipo: '' })
++const jugadoresSuspendidos = ref([])
++const fotoVocaliaArchivo = ref(null)
++const fotoVocaliaPreview = ref('')
+ 
+ const seleccionarDocumento = (event) => {
+     const archivo = event.target.files[0]
+@@ -70,6 +73,16 @@ const nuevoEquipo = ref({ nombre: '', fecha_fundacion: '', categoria: '', url_lo
+ const logoPreview = ref('')
+ const archivoSeleccionado = ref(null)
+ 
++const formatearTextoMayusculas = (valor) => (valor || '').toUpperCase()
++const fechaMaximaFundacion = new Date().toISOString().split('T')[0]
++const fechaMinimaFundacion = new Date(Date.now() - 1000 * 60 * 60 * 24 * 365 * 50).toISOString().split('T')[0]
++
++const normalizarEntero = (valor, minimo, maximo) => {
++    const numero = Number.parseInt(valor, 10)
++    if (Number.isNaN(numero)) return minimo
++    return Math.min(Math.max(numero, minimo), maximo)
++}
++
+ const mostrarModalPlantilla = ref(false)
+ const equipoSeleccionadoPlantilla = ref('')
+ const jugadoresFiltradosPlantilla = ref([])
+@@ -78,7 +91,7 @@ const arbitros = ref([])
+ const cargandoArbitro = ref(false)
+ const msjErrorArbitro = ref('')
+ const msjExitoArbitro = ref('')
+-const nuevoArbitro = ref({ nombre: '', apellido: '', experiencia_anios: '' })
++const nuevoArbitro = ref({ nombre: '', apellido: '', cedula: '', experiencia_anios: '' })
+ const arbitroFotoPreview = ref('')
+ const archivoArbitroSeleccionado = ref(null)
+ 
+@@ -120,6 +133,7 @@ const cargarEquipos = async () => { try { const res = await fetch('http://127.0.
+ const cargarJugadores = async () => { try { const res = await fetch('http://127.0.0.1:8000/jugadores'); if(res.ok) jugadoresRegistrados.value = await res.json(); } catch (err) {} }
+ const cargarArbitros = async () => { try { const res = await fetch('http://127.0.0.1:8000/arbitros'); if(res.ok) arbitros.value = await res.json(); } catch (err) {} }
+ const cargarPartidos = async () => { try { const res = await fetch('http://127.0.0.1:8000/partidos'); if(res.ok) partidos.value = await res.json(); } catch (err) {} }
++const cargarJugadoresSuspendidos = async () => { try { const res = await fetch('http://127.0.0.1:8000/jugadores/suspendidos'); if(res.ok) jugadoresSuspendidos.value = await res.json(); } catch (err) {} }
+ 
+ const cargarEstadisticas = async () => {
+     try {
+@@ -133,7 +147,7 @@ const cargarEstadisticas = async () => {
+ onMounted(async () => {
+     const usuarioSesion = JSON.parse(localStorage.getItem('usuario'))
+     if (!usuarioSesion) { router.push('/login'); return; }
+-    await cargarEquipos(); await cargarJugadores(); await cargarArbitros(); await cargarPartidos(); await cargarEstadisticas();
++    await cargarEquipos(); await cargarJugadores(); await cargarArbitros(); await cargarPartidos(); await cargarEstadisticas(); await cargarJugadoresSuspendidos();
+ })
+ const cerrarSesion = () => { localStorage.removeItem('usuario'); router.push('/login'); }
+ 
+@@ -165,6 +179,7 @@ const equiposDestinoParaTraspaso = computed(() => {
+ })
+ 
+ const partidosPendientes = computed(() => partidos.value.filter(p => p.estado === 'Pendiente'))
++const hayPartidosPendientes = computed(() => partidosPendientes.value.length > 0)
+ const contarJugadores = (id) => jugadoresRegistrados.value.filter(j => j.id_equipo === id).length
+ const obtenerLogoEquipo = (nombre) => { const eq = equipos.value.find(e => e.nombre === nombre); return eq ? eq.url_logo : null; }
+ 
+@@ -177,14 +192,49 @@ const base64ToFile = async (base64String, filename) => { const res = await fetch
+ const uploadToFirebase = async (file, folder) => { const formData = new FormData(); formData.append('file', file); formData.append('folder', folder); const res = await fetch('http://127.0.0.1:8000/upload-image', { method: 'POST', body: formData }); const data = await res.json(); if (!res.ok) throw new Error(data.detail); return data.url; }
+ 
+ const limpiarFormularioJugador = () => { editandoJugador.value = false; idJugadorEditando.value = null; cedula.value = ''; id_equipo.value = ''; nombre.value = ''; apellido.value = ''; fecha_nacimiento.value = ''; numero_camiseta.value = ''; acepta_terminos.value = false; fotoBase64.value = ''; fotoTomada.value = false; camaraAbierta.value = false; removerDocumento(); mensajeError.value = ''; mensajeExito.value = ''; }
++const validarCedula = (event) => { const valor = (event?.target?.value ?? cedula.value).replace(/\D/g, '').slice(0, 10); cedula.value = valor }
++const validarJugadorFormulario = () => {
++    const textoCedula = cedula.value.trim()
++    if (!/^[0-9]{1,10}$/.test(textoCedula)) return 'La cédula debe tener solo números y máximo 10 dígitos.'
++    if (!nombre.value.trim() || !apellido.value.trim()) return 'Ingresa nombres y apellidos del jugador.'
++    if (!fecha_nacimiento.value) return 'Selecciona la fecha de nacimiento.'
++    const edad = new Date().getFullYear() - new Date(fecha_nacimiento.value).getFullYear()
++    if (edad < 15) return 'El jugador debe ser mayor de 15 años para registrarse.'
++    if (!id_equipo.value) return 'Selecciona un equipo para el jugador.'
++    const camiseta = Number(numero_camiseta.value)
++    if (!Number.isInteger(camiseta) || camiseta < 1 || camiseta > 99) return 'El número de camiseta debe estar entre 1 y 99.'
++    if (!fotoBase64.value) return 'Toma o sube una foto del jugador antes de guardar.'
++    if (!editandoJugador.value && !docSeleccionado.value) return 'Adjunta una imagen del documento del jugador.'
++    if (!acepta_terminos.value) return 'Debes aceptar los términos y condiciones.'
++    return ''
++}
+ 
+ // ACCIONES JUGADORES
+ const prepararReimpresion = (j) => { datosCarnet.value = { nombre: j.nombre, apellido: j.apellido, equipo: j.nombre_equipo, categoria: j.categoria_equipo, cedula: j.cedula, numero_camiseta: j.numero_camiseta, fotoBase64: j.url_foto, logoEquipo: obtenerLogoEquipo(j.nombre_equipo) }; mostrarCarnet.value = true; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+ const prepararEdicionJugador = (j) => { editandoJugador.value = true; idJugadorEditando.value = j.id_jugador; cedula.value = j.cedula; nombre.value = j.nombre; apellido.value = j.apellido; fecha_nacimiento.value = j.fecha_nacimiento; numero_camiseta.value = j.numero_camiseta; id_equipo.value = j.id_equipo; fotoBase64.value = j.url_foto || ''; fotoTomada.value = !!j.url_foto; docPreview.value = j.url_documento || ''; acepta_terminos.value = true; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+ const eliminarJugador = async (id, n) => { if (!confirm(`¿Dar de baja a ${n}?`)) return; try { const res = await fetch(`http://127.0.0.1:8000/jugadores/${id}`, { method: 'DELETE' }); if (res.ok) { alert("Dado de baja."); await cargarJugadores(); } } catch (err) {} }
++const manejarSuspensionJugador = async (jugador) => {
++    if (jugador.suspendido_hasta) {
++        if (!confirm(`¿Quitar la suspensión de ${jugador.nombre} ${jugador.apellido}?`)) return
++        try {
++            const res = await fetch(`http://127.0.0.1:8000/jugadores/${jugador.id_jugador}/suspender`, { method: 'DELETE' })
++            if (res.ok) { await cargarJugadores(); await cargarJugadoresSuspendidos(); mensajeExito.value = 'Suspensión removida.'; setTimeout(() => { mensajeExito.value = '' }, 3000) }
++        } catch (err) {}
++        return
++    }
++    const motivo = window.prompt('Motivo de la suspensión por un año', 'Conducta reiterada')
++    if (!motivo || !motivo.trim()) return
++    try {
++        const res = await fetch(`http://127.0.0.1:8000/jugadores/${jugador.id_jugador}/suspender`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo: motivo.trim() }) })
++        if (res.ok) { await cargarJugadores(); await cargarJugadoresSuspendidos(); mensajeExito.value = 'Jugador suspendido por un año.'; setTimeout(() => { mensajeExito.value = '' }, 3000) }
++        else { const d = await res.json(); mensajeError.value = d.detail || 'No se pudo suspender.' }
++    } catch (err) { mensajeError.value = 'No se pudo registrar la suspensión.' }
++}
+ 
+ const registrarJugador = async () => {
+-    if (!fotoBase64.value || (!editandoJugador.value && !docSeleccionado.value) || !acepta_terminos.value) { mensajeError.value = "Completa los campos obligatorios."; window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
++    const validacion = validarJugadorFormulario()
++    if (validacion) { mensajeError.value = validacion; window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
++    mensajeError.value = ''
+     cargando.value = true; mensajeError.value = ''; mensajeExito.value = '';
+     try {
+         let rf = fotoBase64.value, df = docPreview.value;
+@@ -200,7 +250,7 @@ const registrarJugador = async () => {
+ // ACCIONES EQUIPOS
+ const seleccionarEscudo = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoSeleccionado.value = archivo; logoPreview.value = URL.createObjectURL(archivo); }
+ const removerEscudo = () => { logoPreview.value = ''; archivoSeleccionado.value = null; }
+-const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = equipo.nombre; nuevoEquipo.value.categoria = equipo.categoria; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
++const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = formatearTextoMayusculas(equipo.nombre); nuevoEquipo.value.categoria = equipo.categoria; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+ const eliminarEquipo = async (id, n) => { 
+     if (contarJugadores(id) > 0) { alert("⚠️ No se puede eliminar: El equipo contiene jugadores registrados."); return; } 
+     if (!confirm(`¿Dar de baja al equipo ${n}?`)) return; 
+@@ -212,18 +262,138 @@ const eliminarEquipo = async (id, n) => {
+ }
+ const verPlantilla = (equipo) => { equipoSeleccionadoPlantilla.value = equipo.nombre; jugadoresFiltradosPlantilla.value = jugadoresRegistrados.value.filter(j => j.id_equipo === equipo.id); mostrarModalPlantilla.value = true; }
+ 
+-const registrarEquipo = async () => { cargandoEquipo.value = true; msjErrorEquipo.value = ''; msjExitoEquipo.value = ''; let logo = logoPreview.value; try { if (archivoSeleccionado.value) logo = await uploadToFirebase(archivoSeleccionado.value, 'equipos'); const res = await fetch(editandoEquipo.value ? `http://127.0.0.1:8000/equipos/${idEquipoEditando.value}` : 'http://127.0.0.1:8000/equipos', { method: editandoEquipo.value ? 'PUT' : 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre_equipo: nuevoEquipo.value.nombre, categoria: nuevoEquipo.value.categoria, fecha_fundacion: nuevoEquipo.value.fecha_fundacion || null, url_logo: logo }) }); if (res.ok) { nuevoEquipo.value = { nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' }; editandoEquipo.value = false; removerEscudo(); await cargarEquipos(); await cargarEstadisticas(); msjExitoEquipo.value="Éxito"; setTimeout(()=>msjExitoEquipo.value='', 3000); } else { const d = await res.json(); msjErrorEquipo.value = d.detail; } } catch (e) {} finally { cargandoEquipo.value = false; } }
++const registrarEquipo = async () => { cargandoEquipo.value = true; msjErrorEquipo.value = ''; msjExitoEquipo.value = ''; let logo = logoPreview.value; try { const nombreEquipo = formatearTextoMayusculas(nuevoEquipo.value.nombre); nuevoEquipo.value.nombre = nombreEquipo; if (archivoSeleccionado.value) logo = await uploadToFirebase(archivoSeleccionado.value, 'equipos'); const res = await fetch(editandoEquipo.value ? `http://127.0.0.1:8000/equipos/${idEquipoEditando.value}` : 'http://127.0.0.1:8000/equipos', { method: editandoEquipo.value ? 'PUT' : 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre_equipo: nombreEquipo, categoria: nuevoEquipo.value.categoria, fecha_fundacion: nuevoEquipo.value.fecha_fundacion || null, url_logo: logo }) }); if (res.ok) { nuevoEquipo.value = { nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' }; editandoEquipo.value = false; removerEscudo(); await cargarEquipos(); await cargarEstadisticas(); msjExitoEquipo.value="Éxito"; setTimeout(()=>msjExitoEquipo.value='', 3000); } else { const d = await res.json(); msjErrorEquipo.value = d.detail; } } catch (e) {} finally { cargandoEquipo.value = false; } }
+ const cancelarEdicionEquipo = () => { editandoEquipo.value = false; nuevoEquipo.value = { nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' }; removerEscudo(); }
+ 
+ // ACCIONES ÁRBITROS
+ const seleccionarArbitroFoto = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoArbitroSeleccionado.value = archivo; arbitroFotoPreview.value = URL.createObjectURL(archivo); }
+ const removerArbitroFoto = () => { arbitroFotoPreview.value = ''; archivoArbitroSeleccionado.value = null; }
+-const registrarArbitro = async () => { cargandoArbitro.value = true; msjErrorArbitro.value = ''; let f = null; try { if (archivoArbitroSeleccionado.value) f = await uploadToFirebase(archivoArbitroSeleccionado.value, 'arbitros'); const res = await fetch('http://127.0.0.1:8000/arbitros', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre: nuevoArbitro.value.nombre, apellido: nuevoArbitro.value.apellido, experiencia_anios: nuevoArbitro.value.experiencia_anios ? parseInt(nuevoArbitro.value.experiencia_anios) : null, url_foto: f }) }); if (res.ok) { nuevoArbitro.value = { nombre: '', apellido: '', experiencia_anios: '' }; removerArbitroFoto(); await cargarArbitros(); msjExitoArbitro.value="Registrado"; setTimeout(()=>msjExitoArbitro.value='', 3000); } else { const d = await res.json(); msjErrorArbitro.value = d.detail; } } catch (e) {} finally { cargandoArbitro.value = false; } }
++const registrarArbitro = async () => { cargandoArbitro.value = true; msjErrorArbitro.value = ''; let f = null; try { if (archivoArbitroSeleccionado.value) f = await uploadToFirebase(archivoArbitroSeleccionado.value, 'arbitros'); const res = await fetch('http://127.0.0.1:8000/arbitros', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre: nuevoArbitro.value.nombre.trim(), apellido: nuevoArbitro.value.apellido.trim(), cedula: nuevoArbitro.value.cedula ? nuevoArbitro.value.cedula.trim() : null, experiencia_anios: nuevoArbitro.value.experiencia_anios ? parseInt(nuevoArbitro.value.experiencia_anios) : null, url_foto: f }) }); if (res.ok) { nuevoArbitro.value = { nombre: '', apellido: '', cedula: '', experiencia_anios: '' }; removerArbitroFoto(); await cargarArbitros(); msjExitoArbitro.value="Registrado"; setTimeout(()=>msjExitoArbitro.value='', 3000); } else { const d = await res.json(); msjErrorArbitro.value = d.detail || 'No se pudo registrar el árbitro.'; } } catch (e) { msjErrorArbitro.value = 'Error de red.'; } finally { cargandoArbitro.value = false; } }
+ 
+ // CALENDARIO Y VOCALÍA
+-const dispararGeneracionCalendario = async () => { if (!confirm("¿Reconfigurar fixture completo?")) return; cargandoCalendario.value = true; try { const res = await fetch('http://127.0.0.1:8000/generar-calendario', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(formCalendario.value) }); if (res.ok) { await cargarPartidos(); } } catch (e) {} finally { cargandoCalendario.value = false; } }
+-const abrirModalEditarPartido = (partido) => { idPartidoEditando.value = partido.id_partido; formEditarPartido.value = { fecha: partido.fecha, hora: partido.hora, id_arbitro: partido.id_arbitro || '' }; mostrarModalEditarPartido.value = true; }
+-const guardarEdicionPartido = async () => { try { const res = await fetch(`http://127.0.0.1:8000/partidos/${idPartidoEditando.value}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ fecha: formEditarPartido.value.fecha, hora: formEditarPartido.value.hora, id_arbitro: formEditarPartido.value.id_arbitro ? parseInt(formEditarPartido.value.id_arbitro) : null }) }); if (res.ok) { mostrarModalEditarPartido.value = false; await cargarPartidos(); alert("Partido actualizado."); } else { const d = await res.json(); alert(d.detail); } } catch (e) {} }
++const obtenerPasswordFixture = async () => {
++    const passwordGuardado = localStorage.getItem('fixture_password')
++    if (passwordGuardado) {
++        const passwordIngresado = window.prompt('Ingresa la contraseña para generar el fixture', '')
++        if (!passwordIngresado) return null
++        if (passwordIngresado !== passwordGuardado) {
++            alert('La contraseña es incorrecta.')
++            return null
++        }
++        return passwordIngresado
++    }
++
++    const passwordNuevo = window.prompt('Crea una contraseña para generar nuevos fixtures', '')
++    if (!passwordNuevo || !passwordNuevo.trim()) return null
++
++    try {
++        const res = await fetch('http://127.0.0.1:8000/config/fixture-password', {
++            method: 'POST',
++            headers: { 'Content-Type': 'application/json' },
++            body: JSON.stringify({ password: passwordNuevo.trim() })
++        })
++        if (!res.ok) {
++            const data = await res.json().catch(() => ({}))
++            alert(data.detail || 'No se pudo guardar la contraseña.')
++            return null
++        }
++        localStorage.setItem('fixture_password', passwordNuevo.trim())
++        return passwordNuevo.trim()
++    } catch (e) {
++        alert('No se pudo guardar la contraseña del fixture.')
++        return null
++    }
++}
++
++const generarFixtureConPassword = async (password) => {
++    const res = await fetch('http://127.0.0.1:8000/generar-calendario', {
++        method: 'POST',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ ...formCalendario.value, password })
++    })
++    const data = await res.json().catch(() => ({}))
++    if (!res.ok) throw new Error(data.detail || 'No se pudo generar el fixture.')
++    return data.mensaje || 'Fixture generado correctamente.'
++}
++
++const textoErrorApi = (detalle, fallback) => {
++    if (!detalle) return fallback
++    if (typeof detalle === 'string') return detalle
++    if (Array.isArray(detalle)) {
++        return detalle
++            .map((item) => item?.msg || item?.detail || JSON.stringify(item))
++            .join(' | ')
++    }
++    if (typeof detalle === 'object') {
++        return detalle.detail || JSON.stringify(detalle)
++    }
++    return String(detalle)
++}
++
++const borrarFixtureConPassword = async (password) => {
++    const res = await fetch('http://127.0.0.1:8000/partidos/fixture', {
++        method: 'DELETE',
++        headers: { 'Content-Type': 'application/json' },
++        body: JSON.stringify({ password })
++    })
++    const data = await res.json().catch(() => ({}))
++    if (!res.ok) throw new Error(textoErrorApi(data.detail, 'No se pudo borrar el fixture.'))
++    return data.mensaje || 'Fixture eliminado correctamente.'
++}
++
++const dispararGeneracionCalendario = async () => {
++    if (!confirm('¿Generar el fixture con la fecha seleccionada?')) return
++    const password = await obtenerPasswordFixture()
++    if (!password) return
++    cargandoCalendario.value = true
++    try {
++        const mensaje = await generarFixtureConPassword(password)
++        await cargarPartidos()
++        await cargarEstadisticas()
++        alert(mensaje)
++    } catch (e) {
++        alert(textoErrorApi(e?.message, 'Error de red'))
++    } finally {
++        cargandoCalendario.value = false
++    }
++}
++
++const recrearFixtureCalendario = async () => {
++    if (!confirm('¿Eliminar el fixture actual y crear uno nuevo?')) return
++    const password = await obtenerPasswordFixture()
++    if (!password) return
++    cargandoCalendario.value = true
++    try {
++        await borrarFixtureConPassword(password)
++        const mensaje = await generarFixtureConPassword(password)
++        await cargarPartidos()
++        await cargarEstadisticas()
++        alert(mensaje)
++    } catch (e) {
++        alert(textoErrorApi(e?.message, 'Error de red'))
++    } finally {
++        cargandoCalendario.value = false
++    }
++}
++
++const borrarFixtureActual = async () => {
++    if (!confirm('¿Eliminar solo el fixture actual?')) return
++    const password = await obtenerPasswordFixture()
++    if (!password) return
++    cargandoCalendario.value = true
++    try {
++        const mensaje = await borrarFixtureConPassword(password)
++        await cargarPartidos()
++        await cargarEstadisticas()
++        alert(mensaje)
++    } catch (e) {
++        alert(textoErrorApi(e?.message, 'Error de red'))
++    } finally {
++        cargandoCalendario.value = false
++    }
++}
++const abrirModalEditarPartido = (partido) => { idPartidoEditando.value = partido.id_partido; formEditarPartido.value = { fecha: partido.fecha, hora: partido.hora, id_arbitro: partido.id_arbitro || '', id_arbitro_2: partido.id_arbitro_2 || '', id_arbitro_3: partido.id_arbitro_3 || '' }; mostrarModalEditarPartido.value = true; }
++const guardarEdicionPartido = async () => { try { const res = await fetch(`http://127.0.0.1:8000/partidos/${idPartidoEditando.value}`, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ fecha: formEditarPartido.value.fecha, hora: formEditarPartido.value.hora, id_arbitro: formEditarPartido.value.id_arbitro ? parseInt(formEditarPartido.value.id_arbitro) : null, id_arbitro_2: formEditarPartido.value.id_arbitro_2 ? parseInt(formEditarPartido.value.id_arbitro_2) : null, id_arbitro_3: formEditarPartido.value.id_arbitro_3 ? parseInt(formEditarPartido.value.id_arbitro_3) : null }) }); if (res.ok) { mostrarModalEditarPartido.value = false; await cargarPartidos(); alert("Partido actualizado."); } else { const d = await res.json(); alert(d.detail); } } catch (e) {} }
+ 
+ // NUEVO: Ver Acta Extrae la información detallada desde la base de datos
+ const verActaFinalizada = async (p) => { 
+@@ -242,8 +412,18 @@ const verActaFinalizada = async (p) => {
+     }
+ }
+ 
++const seleccionarFotoVocalia = (event) => {
++    const archivo = event.target.files[0]
++    if (!archivo) return
++    fotoVocaliaArchivo.value = archivo
++    fotoVocaliaPreview.value = URL.createObjectURL(archivo)
++}
++const removerFotoVocalia = () => {
++    fotoVocaliaPreview.value = ''
++    fotoVocaliaArchivo.value = null
++}
+ const abrirMesaVocalia = async (partido) => {
+-    partidoSeleccionadoVocalia.value = partido; golesLocalForm.value = 0; golesVisitanteForm.value = 0; novedadesForm.value = '';
++    partidoSeleccionadoVocalia.value = partido; golesLocalForm.value = 0; golesVisitanteForm.value = 0; novedadesForm.value = ''; removerFotoVocalia();
+     try {
+         const res = await fetch(`http://127.0.0.1:8000/partidos/${partido.id_partido}/vocalia`)
+         if (res.ok) {
+@@ -256,6 +436,19 @@ const abrirMesaVocalia = async (partido) => {
+ }
+ 
+ const enviarActaVocalia = async () => {
++    plantillaLocalVocalia.value.forEach(j => {
++        j.goles = normalizarEntero(j.goles, 0, 99)
++        j.amarillas = normalizarEntero(j.amarillas, 0, 2)
++        j.rojas = normalizarEntero(j.rojas, 0, 1)
++    })
++    plantillaVisitanteVocalia.value.forEach(j => {
++        j.goles = normalizarEntero(j.goles, 0, 99)
++        j.amarillas = normalizarEntero(j.amarillas, 0, 2)
++        j.rojas = normalizarEntero(j.rojas, 0, 1)
++    })
++    golesLocalForm.value = normalizarEntero(golesLocalForm.value, 0, 99)
++    golesVisitanteForm.value = normalizarEntero(golesVisitanteForm.value, 0, 99)
++
+     const sl = plantillaLocalVocalia.value.reduce((a, j) => a + Number(j.goles), 0);
+     const sv = plantillaVisitanteVocalia.value.reduce((a, j) => a + Number(j.goles), 0);
+     
+@@ -267,10 +460,13 @@ const enviarActaVocalia = async () => {
+     const incV = plantillaVisitanteVocalia.value.filter(j => j.goles > 0 || j.amarillas > 0 || j.rojas > 0).map(j => ({ id_jugador: j.id_jugador, goles: j.goles, amarillas: j.amarillas, rojas: j.rojas }))
+     
+     try {
++        let fotoVocaliaUrl = ''
++        if (fotoVocaliaArchivo.value) fotoVocaliaUrl = await uploadToFirebase(fotoVocaliaArchivo.value, 'vocalia')
+         const payload = { 
+             goles_local: parseInt(golesLocalForm.value), 
+             goles_visitante: parseInt(golesVisitanteForm.value), 
+-            novedades: novedadesForm.value, // Enviando las novedades
++            novedades: novedadesForm.value,
++            foto_vocalia_url: fotoVocaliaUrl || undefined,
+             incidencias: [...incL, ...incV] 
+         }
+         const res = await fetch(`http://127.0.0.1:8000/partidos/${partidoSeleccionadoVocalia.value.id_partido}/finalizar`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(payload) });
+@@ -350,7 +546,7 @@ const alterarCategoriaClub = async (id, catActual) => {
+                             </div>
+                         </div>
+                         <div class="grid grid-cols-1 md:grid-cols-3 gap-6 pt-4 border-t">
+-                            <div><label class="block text-sm font-bold text-gray-700 mb-1">Documento ID</label><input v-model="cedula" type="text" required class="w-full p-3 border rounded-lg uppercase outline-none" /></div>
++                            <div><label class="block text-sm font-bold text-gray-700 mb-1">Documento ID</label><input v-model="cedula" @input="validarCedula" type="text" required maxlength="10" inputmode="numeric" class="w-full p-3 border rounded-lg uppercase outline-none" /><p class="text-xs text-gray-500 mt-1">Máximo 10 dígitos.</p></div>
+                             <div class="md:col-span-2">
+                                 <label class="block text-sm font-bold text-gray-700 mb-1">Equipo <span v-if="editandoJugador" class="text-xs text-red-500 font-normal">(Usa 'Gestión Torneo' para transferencias)</span></label>
+                                 <select v-model="id_equipo" :disabled="editandoJugador" required :class="{'bg-gray-100 cursor-not-allowed': editandoJugador}" class="w-full p-3 border rounded-lg bg-white outline-none"><option v-for="eq in equipos" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }})</option></select>
+@@ -363,6 +559,8 @@ const alterarCategoriaClub = async (id, catActual) => {
+                         <div class="pt-6 border-t">
+                             <label class="flex items-start space-x-3 cursor-pointer p-4 bg-blue-50 rounded-xl"><input v-model="acepta_terminos" type="checkbox" required class="mt-1 h-5 w-5" /><span class="text-sm text-gray-700">Acepto los Términos y Condiciones de la LDP Conocoto.</span></label>
+                             <div class="flex space-x-4 mt-4"><button v-if="editandoJugador" @click="limpiarFormularioJugador" type="button" class="w-1/3 bg-gray-500 text-white font-bold py-4 rounded-xl shadow transition">CANCELAR EDICIÓN</button><button type="submit" :disabled="!acepta_terminos || cargando" class="w-full bg-[#001a4d] text-white font-bold py-4 rounded-xl shadow flex justify-center items-center">{{ editandoJugador ? 'ACTUALIZAR JUGADOR' : 'GUARDAR JUGADOR' }}</button></div>
++                            <div v-if="mensajeError" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-semibold text-red-700">⚠️ {{ mensajeError }}</div>
++                            <div v-if="mensajeExito" class="mt-4 rounded-xl border border-green-200 bg-green-50 px-4 py-3 text-sm font-semibold text-green-700">✅ {{ mensajeExito }}</div>
+                         </div>
+                     </form>
+                 </div>
+@@ -407,11 +605,25 @@ const alterarCategoriaClub = async (id, catActual) => {
+                                     <td class="p-3"><p class="font-bold text-[#001a4d]">{{ jug.nombre }} {{ jug.apellido }}</p><p class="text-xs font-mono uppercase text-gray-500">{{ jug.cedula }}</p></td>
+                                     <td class="p-3"><div class="flex items-center space-x-2"><img v-if="obtenerLogoEquipo(jug.nombre_equipo)" :src="obtenerLogoEquipo(jug.nombre_equipo)" class="h-6 w-6 object-contain" /><span class="font-medium text-gray-700">{{ jug.nombre_equipo }}</span></div></td>
+                                     <td class="p-3 text-center"><span class="px-2 py-0.5 bg-yellow-100 font-black rounded border text-yellow-800">#{{ jug.numero_camiseta }}</span></td>
+-                                    <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararReimpresion(jug)" class="bg-blue-100 text-blue-700 p-2 rounded hover:bg-blue-200">🖨️</button><button @click="prepararEdicionJugador(jug)" class="bg-gray-100 text-gray-700 p-2 rounded hover:bg-gray-200">✏️</button><button @click="eliminarJugador(jug.id_jugador, `${jug.nombre} ${jug.apellido}`)" class="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100">🗑️</button></div></td>
++                                    <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararReimpresion(jug)" class="bg-blue-100 text-blue-700 p-2 rounded hover:bg-blue-200">🖨️</button><button @click="prepararEdicionJugador(jug)" class="bg-gray-100 text-gray-700 p-2 rounded hover:bg-gray-200">✏️</button><button @click="manejarSuspensionJugador(jug)" :class="jug.suspendido_hasta ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' : 'bg-red-50 text-red-600 hover:bg-red-100'" class="p-2 rounded">⏸️</button><button @click="eliminarJugador(jug.id_jugador, `${jug.nombre} ${jug.apellido}`)" class="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100">🗑️</button></div></td>
+                                 </tr>
+                             </tbody>
+                         </table>
+                     </div>
++                    <div class="mt-8 border-t pt-6">
++                        <h3 class="text-lg font-black text-gray-800 mb-3">🛑 Gestión de suspensiones activas</h3>
++                        <div v-if="jugadoresSuspendidos.length" class="space-y-2">
++                            <div v-for="s in jugadoresSuspendidos" :key="s.id_jugador" class="flex items-center justify-between rounded-xl border border-orange-200 bg-orange-50 px-4 py-3 text-sm">
++                                <div>
++                                    <p class="font-bold text-gray-800">{{ s.nombre }} {{ s.apellido }}</p>
++                                    <p class="text-xs text-gray-600">{{ s.equipo }} · Hasta {{ s.fecha_fin }}</p>
++                                    <p v-if="s.motivo" class="text-xs text-orange-700">Motivo: {{ s.motivo }}</p>
++                                </div>
++                                <button @click="manejarSuspensionJugador({ id_jugador: s.id_jugador, nombre: s.nombre, apellido: s.apellido, suspendido_hasta: true })" class="rounded-lg bg-orange-600 px-3 py-2 text-xs font-bold text-white">Quitar</button>
++                            </div>
++                        </div>
++                        <p v-else class="text-sm text-gray-500">No hay jugadores con suspensión activa.</p>
++                    </div>
+                 </div>
+             </div>
+ 
+@@ -422,9 +634,9 @@ const alterarCategoriaClub = async (id, catActual) => {
+                     <div v-if="msjErrorEquipo" class="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border">⚠️ {{ msjErrorEquipo }}</div>
+                     <div v-if="msjExitoEquipo" class="bg-green-50 text-green-700 p-3 rounded-lg text-sm mb-4 border">✅ {{ msjExitoEquipo }}</div>
+                     <form @submit.prevent="registrarEquipo" class="space-y-5">
+-                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Nombre</label><input v-model="nuevoEquipo.nombre" type="text" required class="w-full p-3 border rounded-lg outline-none uppercase" /></div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Nombre</label><input v-model="nuevoEquipo.nombre" @input="nuevoEquipo.nombre = formatearTextoMayusculas($event.target.value)" type="text" required class="w-full p-3 border rounded-lg outline-none uppercase" /></div>
+                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Categoría</label><select v-model="nuevoEquipo.categoria" required class="w-full p-3 border rounded-lg bg-white outline-none"><option value="Máxima">Máxima</option><option value="Primera">Primera</option></select></div>
+-                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Fecha Fundación</label><input v-model="nuevoEquipo.fecha_fundacion" type="date" class="w-full p-3 border rounded-lg outline-none" /></div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Fecha Fundación</label><input v-model="nuevoEquipo.fecha_fundacion" type="date" :max="fechaMaximaFundacion" :min="fechaMinimaFundacion" class="w-full p-3 border rounded-lg outline-none" /></div>
+                         <div>
+                             <label class="block text-sm font-bold text-gray-700 mb-1">Escudo Oficial</label>
+                             <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-xl bg-gray-50 relative group">
+@@ -446,7 +658,7 @@ const alterarCategoriaClub = async (id, catActual) => {
+                             <tbody>
+                                 <tr v-for="eq in equipos" :key="eq.id" class="border-b hover:bg-gray-50 transition">
+                                     <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-10 w-10 object-contain rounded-full border bg-white" /><div v-else class="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-xl">🛡️</div></td>
+-                                    <td class="p-3 font-bold text-[#001a4d]">{{ eq.nombre }}</td>
++                                    <td class="p-3 font-bold text-[#001a4d]">{{ formatearTextoMayusculas(eq.nombre) }}</td>
+                                     <td class="p-3"><span class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">{{ eq.categoria }}</span></td>
+                                     <td class="p-3 text-center font-bold text-gray-600">{{ contarJugadores(eq.id) }} / 25</td>
+                                     <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararEdicionEquipo(eq)" class="bg-gray-100 hover:bg-gray-200 p-2 rounded">✏️</button><button @click="verPlantilla(eq)" class="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded">👥</button><button @click="eliminarEquipo(eq.id, eq.nombre)" class="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded">🗑️</button></div></td>
+@@ -469,6 +681,7 @@ const alterarCategoriaClub = async (id, catActual) => {
+                             <div><label class="block text-sm font-bold text-gray-700 mb-1">Nombres</label><input v-model="nuevoArbitro.nombre" type="text" required class="w-full p-3 border rounded-lg outline-none" /></div>
+                             <div><label class="block text-sm font-bold text-gray-700 mb-1">Apellidos</label><input v-model="nuevoArbitro.apellido" type="text" required class="w-full p-3 border rounded-lg outline-none" /></div>
+                         </div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Cédula</label><input v-model="nuevoArbitro.cedula" type="text" maxlength="10" inputmode="numeric" class="w-full p-3 border rounded-lg outline-none" /></div>
+                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Años de Experiencia</label><input v-model="nuevoArbitro.experiencia_anios" type="number" min="0" class="w-full p-3 border rounded-lg outline-none" /></div>
+                         <div>
+                             <label class="block text-sm font-bold text-gray-700 mb-1">Fotografía de Perfil</label>
+@@ -486,11 +699,12 @@ const alterarCategoriaClub = async (id, catActual) => {
+                 <div class="bg-white p-8 rounded-2xl border shadow-lg">
+                     <h2 class="text-2xl font-black text-gray-800 mb-6">📋 Cuerpo Arbitral Registrado</h2>
+                     <table class="w-full text-left border-collapse">
+-                        <thead><tr class="bg-gray-100 text-sm"><th class="p-3 border-b-2 text-center">Foto</th><th class="p-3 border-b-2">Nombre Completo</th><th class="p-3 border-b-2 text-center">Experiencia</th></tr></thead>
++                        <thead><tr class="bg-gray-100 text-sm"><th class="p-3 border-b-2 text-center">Foto</th><th class="p-3 border-b-2">Nombre Completo</th><th class="p-3 border-b-2">Cédula</th><th class="p-3 border-b-2 text-center">Experiencia</th></tr></thead>
+                         <tbody>
+                             <tr v-for="arb in arbitros" :key="arb.id_arbitro" class="border-b hover:bg-gray-50 transition">
+                                 <td class="p-3 flex justify-center"><img v-if="arb.url_foto" :src="arb.url_foto" class="h-10 w-10 object-cover rounded-full border" /><div v-else class="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center">🏁</div></td>
+                                 <td class="p-3 font-bold text-[#001a4d]">{{ arb.nombre }} {{ arb.apellido }}</td>
++                                <td class="p-3 text-sm text-gray-700">{{ arb.cedula || 'Sin cédula' }}</td>
+                                 <td class="p-3 text-center"><span class="px-2 py-1 bg-green-50 text-green-800 font-bold rounded-md border border-green-200 text-xs">{{ arb.experiencia_anios || 0 }} años</span></td>
+                             </tr>
+                         </tbody>
+@@ -501,10 +715,21 @@ const alterarCategoriaClub = async (id, catActual) => {
+             <!-- VISTA 4: CALENDARIO -->
+             <div v-show="vistaActual === 'calendario'" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                 <div class="lg:col-span-1 bg-white p-6 rounded-2xl border shadow-lg h-fit">
+-                    <h2 class="text-xl font-black text-[#001a4d] mb-4">⚙️ Generar Fixture</h2>
++                    <div class="flex items-start justify-between gap-3 mb-4">
++                        <div>
++                            <h2 class="text-xl font-black text-[#001a4d]">⚙️ Fixture Oficial</h2>
++                            <p class="text-xs text-gray-500 mt-1">Genera, limpia o reconstruye el calendario del torneo.</p>
++                        </div>
++                        <span class="bg-blue-50 text-blue-700 text-[10px] font-black px-3 py-1 rounded-full border border-blue-200 uppercase tracking-wider">{{ partidos.length }} partidos</span>
++                    </div>
+                     <form @submit.prevent="dispararGeneracionCalendario" class="space-y-4">
+-                        <div><label class="block text-xs font-bold text-gray-700 mb-1">Sábado de Inicio</label><input v-model="formCalendario.fecha_inicio" type="date" required class="w-full p-3 border rounded-xl text-sm outline-none" /></div>
+-                        <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl text-sm shadow transition">COMPILAR TORNEO</button>
++                        <div>
++                            <label class="block text-xs font-black text-gray-700 mb-1 uppercase tracking-wide">Sábado de Inicio</label>
++                            <input v-model="formCalendario.fecha_inicio" type="date" required class="w-full p-3 border rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
++                        </div>
++                        <button type="submit" class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-black py-3 rounded-xl text-sm shadow transition">Generar Fixture</button>
++                        <button type="button" @click="recrearFixtureCalendario" class="w-full bg-yellow-400 hover:bg-yellow-500 text-[#001a4d] font-black py-3 rounded-xl text-sm shadow transition">Borrar y recrear fixture</button>
++                        <button type="button" @click="borrarFixtureActual" class="w-full bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl text-sm shadow transition">Borrar fixture actual</button>
+                     </form>
+                 </div>
+                 <div class="lg:col-span-2 bg-white p-8 rounded-2xl shadow-xl border border-gray-200">
+@@ -616,38 +841,54 @@ const alterarCategoriaClub = async (id, catActual) => {
+             <div v-show="vistaActual === 'torneo'" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                 <!-- Formulario de Traspaso -->
+                 <div class="lg:col-span-1 bg-white p-6 rounded-2xl border shadow-lg h-fit">
+-                    <h3 class="text-xl font-black text-[#001a4d] mb-2 flex items-center">🔄 Traspaso Oficial</h3>
+-                    <p class="text-xs text-gray-400 mb-4">Cambia la afiliación del jugador validando dorsales.</p>
+-                    <div v-if="msjTraspasoError" class="bg-red-50 text-red-600 p-3 rounded-lg text-xs mb-3 border">⚠️ {{ msjTraspasoError }}</div>
+-                    <div v-if="msjTraspasoExito" class="bg-green-50 text-green-700 p-3 rounded-lg text-xs mb-3 border">✅ {{ msjTraspasoExito }}</div>
++                    <div class="flex items-start justify-between gap-3 mb-4">
++                        <div>
++                            <h3 class="text-xl font-black text-[#001a4d] flex items-center">🔄 Traspaso Oficial</h3>
++                            <p class="text-xs text-gray-500 mt-1">Filtra por jugador y destino antes de confirmar el cambio.</p>
++                        </div>
++                        <span class="bg-gray-100 text-gray-600 text-[10px] font-black px-3 py-1 rounded-full border uppercase tracking-wider">Mercado</span>
++                    </div>
++                    <div v-if="hayPartidosPendientes" class="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs font-semibold text-amber-800 shadow-sm">⚠️ Los traspasos quedan bloqueados hasta que se jueguen todos los partidos pendientes.</div>
++                    <div v-if="msjTraspasoError" class="bg-red-50 text-red-700 p-3 rounded-2xl text-xs mb-3 border border-red-200">⚠️ {{ msjTraspasoError }}</div>
++                    <div v-if="msjTraspasoExito" class="bg-green-50 text-green-700 p-3 rounded-2xl text-xs mb-3 border border-green-200">✅ {{ msjTraspasoExito }}</div>
+                     <form @submit.prevent="ejecutarTraspasoOficial" class="space-y-4">
+-                        <div class="bg-gray-50 p-4 rounded-xl border border-gray-200">
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">🔍 Filtro de Jugador</label>
+-                            <input v-model="filtroTraspasoBusqueda" type="text" placeholder="Escribe el nombre o cédula..." class="w-full p-2 mb-3 border border-gray-300 rounded-lg text-sm outline-none focus:border-blue-600" />
+-                            
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">Seleccionar Jugador a Transferir</label>
+-                            <select v-model="formTraspaso.id_jugador" required class="w-full p-2 border border-gray-300 rounded-lg bg-white text-sm font-medium outline-none focus:border-blue-600">
++                        <div class="bg-gradient-to-br from-gray-50 to-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
++                            <div>
++                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">🔍 Buscar jugador</label>
++                                <input v-model="filtroTraspasoBusqueda" type="text" placeholder="Nombre, apellido o cédula" class="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 bg-white" />
++                            </div>
++                            <div>
++                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Seleccionar jugador</label>
++                                <select v-model="formTraspaso.id_jugador" required class="w-full p-3 border border-gray-300 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                                 <option value="" disabled>-- Seleccione Jugador --</option>
+                                 <option v-for="j in jugadoresParaTraspaso" :key="j.id_jugador" :value="j.id_jugador">{{ j.apellido }} {{ j.nombre }} ({{ j.nombre_equipo }})</option>
+-                            </select>
++                                </select>
++                            </div>
+                         </div>
+-                        <div class="bg-blue-50 p-4 rounded-xl border border-blue-100">
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">🔍 Filtro Equipo Destino</label>
+-                            <input v-model="filtroTraspasoDestino" type="text" placeholder="Buscar equipo destino..." class="w-full p-2 mb-3 border border-blue-200 rounded-lg text-sm outline-none focus:border-blue-600" />
+-
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">Nuevo Equipo Destino</label>
+-                            <select v-model="formTraspaso.id_nuevo_equipo" required class="w-full p-2 border border-blue-200 rounded-lg bg-white text-sm font-medium outline-none focus:border-blue-600">
++                        <div class="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm space-y-3">
++                            <div>
++                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">🔍 Buscar equipo destino</label>
++                                <input v-model="filtroTraspasoDestino" type="text" placeholder="Nombre del club" class="w-full p-3 border border-blue-200 rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 bg-white" />
++                            </div>
++                            <div>
++                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo equipo destino</label>
++                                <select v-model="formTraspaso.id_nuevo_equipo" required class="w-full p-3 border border-blue-200 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                                 <option value="" disabled>-- Seleccione Destino --</option>
+                                 <option v-for="eq in equiposDestinoParaTraspaso" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }})</option>
+-                            </select>
++                                </select>
++                            </div>
+                         </div>
+-                        <div><label class="block text-xs font-bold text-gray-700 mb-1">Nuevo Número de Dorsal</label><input v-model="formTraspaso.nuevo_numero_camiseta" type="number" required min="1" max="99" class="w-full p-3 border rounded-xl text-xs font-bold outline-none" placeholder="Ej. 10" /></div>
+-                        <button type="submit" class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-black py-3 rounded-xl text-xs shadow transition">FIRMAR TRASPASO EN LA LIGA</button>
++                        <div>
++                            <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo número de dorsal</label>
++                            <input v-model="formTraspaso.nuevo_numero_camiseta" type="number" required min="1" max="99" class="w-full p-3 border rounded-xl text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Ej. 10" />
++                        </div>
++                        <button type="submit" :disabled="hayPartidosPendientes" class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-black py-3 rounded-xl text-xs shadow transition disabled:cursor-not-allowed disabled:bg-gray-400">FIRMAR TRASPASO EN LA LIGA</button>
+                     </form>
+                 </div>
+                 <div class="lg:col-span-2 bg-white p-6 rounded-2xl border shadow-lg">
+                     <h3 class="text-xl font-black text-gray-800 mb-2">🛡️ Control de Ascensos y Descensos de Categoría</h3>
+                     <p class="text-xs text-gray-400 mb-4">Modifica directamente las series de los clubes al terminar la temporada anual.</p>
++                    <div v-if="hayPartidosPendientes" class="mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">⚠️ Los ascensos y descensos quedan bloqueados hasta que se completen todos los partidos pendientes.</div>
+                     <table class="w-full text-left border-collapse text-xs">
+                         <thead><tr class="bg-gray-100 font-bold"> <th class="p-3">Escudo</th> <th class="p-3">Nombre Club</th> <th class="p-3">Serie Actual</th> <th class="p-3 text-center">Modificación</th> </tr></thead>
+                         <tbody>
+@@ -655,7 +896,7 @@ const alterarCategoriaClub = async (id, catActual) => {
+                                 <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-8 w-8 object-contain rounded-full bg-white" /></td>
+                                 <td class="p-3 font-black text-sm text-[#001a4d]">{{ eq.nombre }}</td>
+                                 <td class="p-3"><span :class="eq.categoria === 'Máxima' ? 'bg-yellow-100 text-yellow-800 font-black border-yellow-300' : 'bg-blue-100 text-blue-800 border-blue-300'" class="px-2.5 py-1 rounded-full border font-bold">{{ eq.categoria }}</span></td>
+-                                <td class="p-3 text-center"><button @click="alterarCategoriaClub(eq.id, eq.categoria)" :class="eq.categoria === 'Máxima' ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-600 hover:bg-green-700'" class="text-white font-bold px-3 py-1.5 rounded-lg transition-all text-[11px]">{{ eq.categoria === 'Máxima' ? 'Descender a Primera' : 'Ascender a Máxima' }}</button></td>
++                                <td class="p-3 text-center"><button @click="alterarCategoriaClub(eq.id, eq.categoria)" :disabled="hayPartidosPendientes" :class="eq.categoria === 'Máxima' ? 'bg-orange-500 hover:bg-orange-600' : 'bg-green-600 hover:bg-green-700'" class="text-white font-bold px-3 py-1.5 rounded-lg transition-all text-[11px] disabled:cursor-not-allowed disabled:bg-gray-400">{{ eq.categoria === 'Máxima' ? 'Descender a Primera' : 'Ascender a Máxima' }}</button></td>
+                             </tr>
+                         </tbody>
+                     </table>
+@@ -672,7 +913,9 @@ const alterarCategoriaClub = async (id, catActual) => {
+                     <form @submit.prevent="guardarEdicionPartido" class="space-y-4">
+                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Fecha del Encuentro</label><input v-model="formEditarPartido.fecha" type="date" required class="w-full p-3 border rounded-xl outline-none" /></div>
+                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Hora de Juego</label><select v-model="formEditarPartido.hora" required class="w-full p-3 border rounded-xl bg-white outline-none"><option value="08:00">08:00 AM</option><option value="10:00">10:00 AM</option><option value="12:00">12:00 PM</option><option value="14:00">14:00 PM</option><option value="16:00">16:00 PM</option></select></div>
+-                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Asignar Árbitro Central</label><select v-model="formEditarPartido.id_arbitro" class="w-full p-3 border rounded-xl bg-white outline-none"><option value="">-- Sin Árbitro Asignado --</option><option v-for="arb in arbitros" :key="arb.id_arbitro" :value="arb.id_arbitro">{{ arb.nombre }} {{ arb.apellido }} ({{ arb.experiencia_anios }} años exp.)</option></select></div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Árbitro 1</label><select v-model="formEditarPartido.id_arbitro" class="w-full p-3 border rounded-xl bg-white outline-none"><option value="">-- Sin asignar --</option><option v-for="arb in arbitros" :key="arb.id_arbitro" :value="arb.id_arbitro">{{ arb.nombre }} {{ arb.apellido }} ({{ arb.experiencia_anios }} años exp.)</option></select></div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Árbitro 2</label><select v-model="formEditarPartido.id_arbitro_2" class="w-full p-3 border rounded-xl bg-white outline-none"><option value="">-- Sin asignar --</option><option v-for="arb in arbitros" :key="arb.id_arbitro + '-2'" :value="arb.id_arbitro">{{ arb.nombre }} {{ arb.apellido }} ({{ arb.experiencia_anios }} años exp.)</option></select></div>
++                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Árbitro 3</label><select v-model="formEditarPartido.id_arbitro_3" class="w-full p-3 border rounded-xl bg-white outline-none"><option value="">-- Sin asignar --</option><option v-for="arb in arbitros" :key="arb.id_arbitro + '-3'" :value="arb.id_arbitro">{{ arb.nombre }} {{ arb.apellido }} ({{ arb.experiencia_anios }} años exp.)</option></select></div>
+                         <div class="flex space-x-3 pt-4"><button type="button" @click="mostrarModalEditarPartido = false" class="w-1/2 bg-gray-500 hover:bg-gray-600 text-white font-bold py-3 rounded-xl transition">Cancelar</button><button type="submit" class="w-1/2 bg-[#001a4d] hover:bg-blue-900 text-white font-bold py-3 rounded-xl shadow transition">Guardar Cambios</button></div>
+                     </form>
+                 </div>
+@@ -721,7 +964,18 @@ const alterarCategoriaClub = async (id, catActual) => {
+                     
+                     <!-- CAMPO NOVEDADES -->
+                     <div class="bg-white p-5 rounded-2xl shadow-sm border">
+-                        <h4 class="font-black text-sm text-[#001a4d] border-b pb-2 mb-3 uppercase">📝 Novedades del Partido (Opcional)</h4>
++                        <h4 class="font-black text-sm text-[#001a4d] border-b pb-2 mb-3 uppercase">� Foto de Vocalía</h4>
++                        <div v-if="!fotoVocaliaPreview" class="flex flex-col items-center justify-center rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 px-4 py-6">
++                            <p class="text-sm font-semibold text-gray-600">Sube una imagen de la vocalía original.</p>
++                            <label class="mt-3 cursor-pointer rounded-lg bg-blue-900 px-4 py-2 text-sm font-bold text-white">Seleccionar foto<input @change="seleccionarFotoVocalia" type="file" accept="image/*" class="sr-only" /></label>
++                        </div>
++                        <div v-else class="space-y-3">
++                            <img :src="fotoVocaliaPreview" class="mx-auto h-40 rounded-xl object-cover" />
++                            <button @click="removerFotoVocalia" type="button" class="rounded-lg bg-red-600 px-3 py-2 text-sm font-bold text-white">Quitar foto</button>
++                        </div>
++                    </div>
++                    <div class="bg-white p-5 rounded-2xl shadow-sm border">
++                        <h4 class="font-black text-sm text-[#001a4d] border-b pb-2 mb-3 uppercase">�📝 Novedades del Partido (Opcional)</h4>
+                         <textarea v-model="novedadesForm" placeholder="Registra cualquier eventualidad, reclamo, observaciones sobre los jugadores o hinchada..." class="w-full p-3 border rounded-xl outline-none focus:border-blue-900 min-h-[80px] text-sm"></textarea>
+                     </div>
+ 
+@@ -741,6 +995,9 @@ const alterarCategoriaClub = async (id, catActual) => {
+                     <div class="inline-block bg-blue-100 text-blue-800 px-4 py-1.5 rounded-full font-bold text-xs uppercase tracking-widest mb-2 shadow-sm">
+                         📅 {{ actaFinalizadaData.fecha }} - ⏰ {{ actaFinalizadaData.hora }}
+                     </div>
++                    <div v-if="detallesActa.foto_vocalia_url" class="flex justify-center">
++                        <img :src="detallesActa.foto_vocalia_url" class="h-40 rounded-2xl object-cover border" />
++                    </div>
+                     
+                     <div class="flex items-center justify-center space-x-6">
+                         <div class="flex flex-col items-center w-1/3">
+diff --git a/frontend-liga-vue/src/views/Inicio.vue b/frontend-liga-vue/src/views/Inicio.vue
+index dca6395..3ddc4f9 100644
+--- a/frontend-liga-vue/src/views/Inicio.vue
++++ b/frontend-liga-vue/src/views/Inicio.vue
+@@ -4,58 +4,88 @@ import { useRouter } from 'vue-router'
+ 
+ const router = useRouter()
+ 
+-// ==========================================
+-// 1. VARIABLES REACTIVAS REALES
+-// ==========================================
++// Variables globales
+ const equipos = ref([])
++const partidos = ref([])
++const totalJugadores = ref(0)
+ const cargando = ref(true)
+ 
+-// Datos que empiezan limpios desde cero
+-const estadisticasExtra = ref({
+-    jugadores: 0,    // Sincronizado a 0 por limpieza de BD
+-    categorias: 2   // Máxima y Primera
+-})
+-
+-const categorias = ref([
++// Variables de estadísticas y categorías
++const categorias = [
+     { id: 1, nombre: 'Máxima', icono: '🏆' },
+     { id: 2, nombre: 'Primera', icono: '⚽' }
+-])
+-
+-// Arreglos vacíos reales listos para recibir datos de tu base de datos
++]
++const categoriaSeleccionada = ref('Máxima')
++const filtroCalendario = ref('Todas')
++const tablaPosiciones = ref([])
+ const goleadores = ref([])
+-const partidos = ref([])
+ 
+-// ==========================================
+-// 2. LÓGICA DE BASE DE DATOS
+-// ==========================================
+-const cargarEquipos = async () => {
++// Funciones de carga
++const cargarDatosGenerales = async () => {
+     try {
+-        const res = await fetch('http://127.0.0.1:8000/equipos');
+-        if (!res.ok) throw new Error("Error en la red");
+-        equipos.value = await res.json();
+-    } catch (err) {
+-        console.error("Error cargando equipos", err);
++        const [resEq, resPart, resJug] = await Promise.all([
++            fetch('http://127.0.0.1:8000/equipos'),
++            fetch('http://127.0.0.1:8000/partidos'),
++            fetch('http://127.0.0.1:8000/jugadores')
++        ])
++        
++        if (resEq.ok) equipos.value = await resEq.json()
++        if (resPart.ok) partidos.value = await resPart.json()
++        if (resJug.ok) {
++            const j = await resJug.json()
++            totalJugadores.value = j.length
++        }
++    } catch (error) {
++        console.error("Error cargando los datos:", error)
+     } finally {
+-        cargando.value = false;
++        cargando.value = false
+     }
+ }
+ 
+-const totalEquipos = computed(() => equipos.value.length)
++const verCategoria = async (categoria) => {
++    categoriaSeleccionada.value = categoria
++    try {
++        const [resPos, resGol] = await Promise.all([
++            fetch(`http://127.0.0.1:8000/estadisticas/posiciones/${categoria}`),
++            fetch(`http://127.0.0.1:8000/goleadores/${categoria}`)
++        ])
++        
++        if (resPos.ok) tablaPosiciones.value = await resPos.json()
++        if (resGol.ok) goleadores.value = await resGol.json()
++    } catch (error) {
++        console.error("Error cargando estadísticas:", error)
++    }
++}
+ 
+-// ==========================================
+-// 3. FUNCIONES DE NAVEGACIÓN
+-// ==========================================
+-const irARegistro = () => router.push('/registro-jugador')
+-const irALogin = () => router.push('/login')
+-const verCategoria = (nombreCategoria) => console.log("Navegando a posiciones de:", nombreCategoria)
++onMounted(async () => {
++    await cargarDatosGenerales()
++    await verCategoria('Máxima') // Carga por defecto la serie Máxima
++})
++
++// Computadas
++const partidosCalendario = computed(() => {
++    if (filtroCalendario.value === 'Todas') return partidos.value
++    return partidos.value.filter(p => p.categoria_local === filtroCalendario.value || p.categoria_visitante === filtroCalendario.value)
++})
++
++const partidosCalendarioPendientes = computed(() => partidosCalendario.value.filter(p => p.estado === 'Pendiente'))
++const partidosCalendarioFinalizados = computed(() => partidosCalendario.value.filter(p => p.estado === 'Finalizado'))
+ 
+-const abrirDetallePartido = (idPartido) => {
+-    console.log("Abriendo detalles del partido para el ID:", idPartido)
++const filtrosCalendario = computed(() => [
++    { nombre: 'Todas', icono: '🗂️' },
++    ...categorias
++])
++
++const totalEquipos = computed(() => equipos.value.length)
++
++// Helpers
++const obtenerLogo = (nombreEquipo) => {
++    const eq = equipos.value.find(e => e.nombre === nombreEquipo)
++    return eq ? eq.url_logo : null
+ }
+ 
+-onMounted(() => {
+-    cargarEquipos()
+-})
++const irARegistro = () => router.push('/registro-jugador')
++const irALogin = () => router.push('/login')
+ </script>
+ 
+ <template>
+@@ -92,8 +122,12 @@ onMounted(() => {
+                         <div class="bg-[#001a4d] text-white p-4">
+                             <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">📊</span> Tablas de Posiciones</h3>
+                         </div>
++                        
++                        <!-- Selectores de Categoría de tu diseño -->
+                         <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+-                            <div v-for="cat in categorias" :key="cat.id" @click="verCategoria(cat.nombre)" class="border border-gray-200 hover:border-[#001a4d] bg-gray-50 rounded-xl p-6 cursor-pointer transition flex items-center group shadow-sm hover:shadow-md">
++                            <div v-for="cat in categorias" :key="cat.id" @click="verCategoria(cat.nombre)" 
++                                 :class="categoriaSeleccionada === cat.nombre ? 'border-[#001a4d] bg-blue-50 shadow-md ring-2 ring-[#001a4d] ring-opacity-20' : 'border-gray-200 bg-gray-50 hover:shadow-md'"
++                                 class="border rounded-xl p-6 cursor-pointer transition flex items-center group">
+                                 <div class="text-4xl mr-4 group-hover:scale-110 transition">{{ cat.icono }}</div>
+                                 <div>
+                                     <h4 class="text-2xl font-black text-[#001a4d]">{{ cat.nombre }}</h4>
+@@ -101,6 +135,44 @@ onMounted(() => {
+                                 </div>
+                             </div>
+                         </div>
++
++                        <!-- TABLA DE POSICIONES MOSTRADA DEBAJO -->
++                        <div class="px-6 pb-6 overflow-x-auto">
++                            <h4 class="font-bold text-[#001a4d] mb-3 text-lg border-b pb-2">Clasificación Serie {{ categoriaSeleccionada }}</h4>
++                            <table class="w-full text-left text-sm border-collapse">
++                                <thead>
++                                    <tr class="bg-gray-100 text-gray-700 font-black">
++                                        <th class="p-2 text-center border-b">Pos</th>
++                                        <th class="p-2 border-b">Club</th>
++                                        <th class="p-2 text-center border-b">PJ</th>
++                                        <th class="p-2 text-center border-b text-green-600">PG</th>
++                                        <th class="p-2 text-center border-b text-gray-500">PE</th>
++                                        <th class="p-2 text-center border-b text-red-500">PP</th>
++                                        <th class="p-2 text-center border-b">GD</th>
++                                        <th class="p-2 text-center border-b bg-blue-50 text-blue-900">PTS</th>
++                                    </tr>
++                                </thead>
++                                <tbody>
++                                    <tr v-for="(pos, idx) in tablaPosiciones" :key="pos.id_equipo" class="border-b hover:bg-gray-50">
++                                        <td class="p-2 text-center font-bold text-gray-500">{{ idx + 1 }}</td>
++                                        <td class="p-2 font-black text-[#001a4d] flex items-center space-x-2">
++                                            <img v-if="pos.url_logo" :src="pos.url_logo" class="h-5 w-5 object-contain rounded-full" />
++                                            <div v-else class="h-5 w-5 bg-gray-200 rounded-full flex items-center justify-center text-[8px]">🛡️</div>
++                                            <span class="truncate">{{ pos.nombre }}</span>
++                                        </td>
++                                        <td class="p-2 text-center font-mono">{{ pos.pj }}</td>
++                                        <td class="p-2 text-center font-mono text-green-600 font-bold">{{ pos.pg }}</td>
++                                        <td class="p-2 text-center font-mono text-gray-500">{{ pos.pe }}</td>
++                                        <td class="p-2 text-center font-mono text-red-500">{{ pos.pp }}</td>
++                                        <td class="p-2 text-center font-mono font-bold" :class="pos.gd >= 0 ? 'text-blue-600' : 'text-red-500'">{{ pos.gd }}</td>
++                                        <td class="p-2 text-center font-mono font-black bg-blue-50 text-blue-900">{{ pos.pts }}</td>
++                                    </tr>
++                                    <tr v-if="tablaPosiciones.length === 0">
++                                        <td colspan="8" class="p-6 text-center text-gray-400 italic">No hay datos registrados aún.</td>
++                                    </tr>
++                                </tbody>
++                            </table>
++                        </div>
+                     </div>
+ 
+                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
+@@ -118,14 +190,14 @@ onMounted(() => {
+                                     </tr>
+                                 </thead>
+                                 <tbody>
+-                                    <tr v-for="(gol, index) in goleadores" :key="gol.id" class="border-b hover:bg-gray-50 transition">
++                                    <tr v-for="(gol, index) in goleadores" :key="index" class="border-b hover:bg-gray-50 transition">
+                                         <td class="p-4 flex items-center">
+                                             <span class="font-black text-gray-400 w-6">{{ index + 1 }}.</span>
+-                                            <span class="font-bold text-[#001a4d]">{{ gol.nombre }}</span>
++                                            <span class="font-bold text-[#001a4d]">{{ gol.jugador }}</span>
+                                         </td>
+                                         <td class="p-4 text-sm text-gray-600 font-medium">{{ gol.equipo }}</td>
+                                         <td class="p-4">
+-                                            <span class="bg-blue-50 text-[#001a4d] border border-blue-200 text-[10px] font-bold px-2 py-1 rounded-full uppercase">{{ gol.categoria }}</span>
++                                            <span class="bg-blue-50 text-[#001a4d] border border-blue-200 text-[10px] font-bold px-2 py-1 rounded-full uppercase">{{ categoriaSeleccionada }}</span>
+                                         </td>
+                                         <td class="p-4 text-center font-black text-xl text-yellow-500">{{ gol.goles }}</td>
+                                     </tr>
+@@ -138,30 +210,62 @@ onMounted(() => {
+                     </div>
+ 
+                     <div class="bg-white rounded-2xl shadow-md border border-gray-100 overflow-hidden">
+-                        <div class="bg-[#001a4d] border-b p-4 flex justify-between items-center text-white">
+-                            <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🏟️</span> Próxima Fecha</h3>
+-                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-2 py-1 rounded uppercase tracking-wider shadow-sm">Jornada Activa</span>
++                        <div class="bg-[#001a4d] border-b p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 text-white">
++                            <div>
++                                <h3 class="text-lg font-black uppercase flex items-center"><span class="mr-2 text-yellow-400">🏟️</span> Calendario Oficial</h3>
++                                <p class="text-[11px] text-blue-100 mt-1">Filtra por categoría y revisa resultados de partidos ya disputados.</p>
++                            </div>
++                            <span class="bg-white text-[#001a4d] text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">Total: {{ partidosCalendario.length }}</span>
++                        </div>
++
++                        <div class="p-4 border-b bg-gray-50 flex flex-wrap gap-2">
++                            <button v-for="filtro in filtrosCalendario" :key="filtro.nombre" @click="filtroCalendario = filtro.nombre"
++                                    :class="filtroCalendario === filtro.nombre ? 'bg-[#001a4d] text-white shadow-md' : 'bg-white text-gray-600 border border-gray-200 hover:border-[#001a4d] hover:text-[#001a4d]'"
++                                    class="px-4 py-2 rounded-full text-xs font-black transition flex items-center gap-2">
++                                <span>{{ filtro.icono }}</span>
++                                <span>{{ filtro.nombre }}</span>
++                            </button>
+                         </div>
+                         
+-                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[400px] overflow-y-auto">
+-                            <div v-for="partido in partidos" :key="partido.id" @click="abrirDetallePartido(partido.id)" class="bg-gray-50 border border-gray-200 rounded-lg p-4 cursor-pointer hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
+-                                <div class="text-center mb-3 border-b border-gray-200 pb-2">
+-                                    <p class="text-xs text-gray-500 font-bold uppercase tracking-wider">{{ partido.fecha }} • {{ partido.hora }}</p>
++                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[440px] overflow-y-auto">
++                            <article v-for="partido in partidosCalendario" :key="partido.id_partido" class="bg-gray-50 border border-gray-200 rounded-2xl p-4 hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
++                                <div class="text-center mb-3 border-b border-gray-200 pb-2 flex items-center justify-between gap-2">
++                                    <p class="text-xs text-gray-500 font-black uppercase tracking-wider">📅 {{ partido.fecha }} • ⏰ {{ partido.hora }}</p>
++                                    <span :class="partido.estado === 'Finalizado' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-yellow-100 text-yellow-800 border-yellow-200'" class="px-2 py-1 rounded-full border text-[10px] font-black uppercase tracking-widest">{{ partido.estado }}</span>
+                                 </div>
+                                 <div class="flex justify-between items-center">
+-                                    <div class="text-center w-[40%]">
++                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
++                                        <img v-if="obtenerLogo(partido.local)" :src="obtenerLogo(partido.local)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
++                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
+                                         <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.local }}</p>
+                                     </div>
+                                     <div class="w-[20%] text-center">
+-                                        <span class="text-[10px] font-black bg-gray-200 text-gray-500 px-2 py-1 rounded">VS</span>
++                                        <span class="text-[10px] font-black bg-[#001a4d] text-yellow-400 px-2 py-1 rounded shadow-inner">VS</span>
+                                     </div>
+-                                    <div class="text-center w-[40%]">
++                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
++                                        <img v-if="obtenerLogo(partido.visitante)" :src="obtenerLogo(partido.visitante)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
++                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
+                                         <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.visitante }}</p>
+                                     </div>
+                                 </div>
+-                                <p class="text-[10px] text-center text-blue-500 font-semibold mt-3">Ver detalles del partido →</p>
++                                <div class="mt-4 flex items-center justify-between gap-3">
++                                    <span class="text-[10px] font-black uppercase tracking-wider text-gray-500">{{ partido.categoria_local || partido.categoria_visitante || 'Sin categoría' }}</span>
++                                    <span v-if="partido.estado === 'Finalizado'" class="bg-green-600 text-white font-black px-3 py-1 rounded-xl text-xs shadow-sm">{{ partido.goles_local }} - {{ partido.goles_visitante }}</span>
++                                    <span v-else class="bg-[#001a4d] text-yellow-400 font-black px-3 py-1 rounded-xl text-xs shadow-sm">Pendiente</span>
++                                </div>
++                            </article>
++                            <div v-if="partidosCalendario.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos para mostrar con este filtro.</div>
++                        </div>
++
++                        <div class="px-4 pb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
++                            <div class="rounded-2xl bg-blue-50 border border-blue-100 p-4 flex items-center justify-between">
++                                <span class="text-xs font-black uppercase tracking-wider text-blue-700">Pendientes</span>
++                                <span class="text-xl font-black text-[#001a4d]">{{ partidosCalendarioPendientes.length }}</span>
++                            </div>
++                            <div class="rounded-2xl bg-green-50 border border-green-100 p-4 flex items-center justify-between">
++                                <span class="text-xs font-black uppercase tracking-wider text-green-700">Finalizados</span>
++                                <span class="text-xl font-black text-[#001a4d]">{{ partidosCalendarioFinalizados.length }}</span>
+                             </div>
+-                            <div v-if="partidos.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos programados para este fin de semana.</div>
+                         </div>
+                     </div>
+ 
+@@ -178,7 +282,7 @@ onMounted(() => {
+                         <div class="p-6 flex flex-col space-y-4">
+                             <div class="flex justify-between items-center border-b border-gray-100 pb-2">
+                                 <span class="text-gray-500 font-bold text-xs uppercase">Categorías</span>
+-                                <span class="text-2xl font-black text-[#001a4d]">{{ estadisticasExtra.categorias }}</span>
++                                <span class="text-2xl font-black text-[#001a4d]">2</span>
+                             </div>
+                             <div class="flex justify-between items-center border-b border-gray-100 pb-2">
+                                 <span class="text-gray-500 font-bold text-xs uppercase">Equipos</span>
+@@ -189,7 +293,10 @@ onMounted(() => {
+                             </div>
+                             <div class="flex justify-between items-center">
+                                 <span class="text-gray-500 font-bold text-xs uppercase">Jugadores</span>
+-                                <span class="text-2xl font-black text-[#001a4d]">{{ estadisticasExtra.jugadores }}</span>
++                                <span class="text-2xl font-black text-[#001a4d]">
++                                    <span v-if="cargando" class="animate-pulse text-gray-300">...</span>
++                                    <span v-else>{{ totalJugadores }}</span>
++                                </span>
+                             </div>
+                         </div>
+                     </div>
+@@ -199,14 +306,10 @@ onMounted(() => {
+                             <h3 class="text-sm font-black uppercase flex items-center"><span class="mr-2">📄</span> Documentos</h3>
+                         </div>
+                         <div class="p-4 space-y-3">
+-                            <a href="#" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
++                            <a href="/reglamento.pdf" target="_blank" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
+                                 <span class="text-xl mr-3 grayscale group-hover:grayscale-0 transition">📑</span>
+                                 <span class="font-bold text-xs text-gray-600 group-hover:text-[#001a4d]">Reglamento General 2026</span>
+                             </a>
+-                            <a href="#" class="flex items-center p-3 rounded-lg border border-gray-200 hover:border-[#001a4d] hover:bg-blue-50 transition group">
+-                                <span class="text-xl mr-3 grayscale group-hover:grayscale-0 transition">📑</span>
+-                                <span class="font-bold text-xs text-gray-600 group-hover:text-[#001a4d]">Cronograma de Vocalías</span>
+-                            </a>
+                         </div>
+                     </div>
+ 
+@@ -252,20 +355,4 @@ onMounted(() => {
+         </footer>
+ 
+     </div>
+-</template>
+-
+-<style scoped>
+-::-webkit-scrollbar {
+-    width: 6px;
+-}
+-::-webkit-scrollbar-track {
+-    background: transparent; 
+-}
+-::-webkit-scrollbar-thumb {
+-    background: #cbd5e1; 
+-    border-radius: 10px;
+-}
+-::-webkit-scrollbar-thumb:hover {
+-    background: #001a4d; 
+-}
+-</style>
+\ No newline at end of file
++</template>
+\ No newline at end of file
+diff --git a/frontend-liga-vue/src/views/JugadorDashboard.vue b/frontend-liga-vue/src/views/JugadorDashboard.vue
+index b693844..d4bc65d 100644
+--- a/frontend-liga-vue/src/views/JugadorDashboard.vue
++++ b/frontend-liga-vue/src/views/JugadorDashboard.vue
+@@ -1,33 +1,66 @@
+ <script setup>
+-import { ref, onMounted } from 'vue'
++import { ref, onMounted, computed } from 'vue'
+ import { useRouter } from 'vue-router'
+ 
+ const router = useRouter()
+ 
+-// Variables de Estado
+-const nombreJugador = ref('Jugador')
+-const cargando = ref(false)
+-const mensajeExito = ref('')
+-const mensajeError = ref('')
++// Datos del usuario logeado
++const usuarioAutenticado = ref(null)
++const miIdJugador = ref(null)
++const miIdEquipo = ref(null)
+ 
+-// Variables del Formulario
+-const id_arbitro = ref('')
+-const id_partido = ref('')
+-const id_jugador = ref('')
+-const puntaje = ref('')
++// Datos principales
++const partidos = ref([])
++const cargando = ref(true)
++
++// Modales y estados
++const mostrarCamerino = ref(false)
++const camerinoData = ref([])
++const partidoCamerino = ref(null)
++
++const mostrarCalificacion = ref(false)
++const partidoA_Calificar = ref(null)
++const puntajeAsignado = ref(0)
++const msjCalificacion = ref('')
++
++const cargarMisDatosYPartidos = async () => {
++    cargando.value = true
++    try {
++        // 1. Obtener mi ID de equipo desde la lista de jugadores (para el camerino)
++        const resJugadores = await fetch('http://127.0.0.1:8000/jugadores')
++        if (resJugadores.ok) {
++            const lista = await resJugadores.json()
++            const misDatos = lista.find(j => j.id_jugador === miIdJugador.value)
++            if (misDatos) {
++                miIdEquipo.value = misDatos.id_equipo
++            }
++        }
++
++        // 2. Obtener mis partidos
++        const res = await fetch(`http://127.0.0.1:8000/jugador/${miIdJugador.value}/partidos`)
++        if (res.ok) {
++            partidos.value = await res.json()
++        }
++    } catch (error) {
++        console.error("Error al cargar el dashboard del jugador", error)
++    } finally {
++        cargando.value = false
++    }
++}
+ 
+-// Verificación de Seguridad y Saludo Dinámico
+ onMounted(() => {
+     const usuarioSesion = JSON.parse(localStorage.getItem('usuario'))
+-    
+-    // Si no está logueado o no es Jugador, lo pateamos al login
+-    if (!usuarioSesion || usuarioSesion.rol !== 'Jugador') {
++    // Verificación de seguridad
++    if (!usuarioSesion || usuarioSesion.rol !== 'Jugador' || !usuarioSesion.id_jugador) {
++        localStorage.removeItem('usuario')
+         router.push('/login')
+         return
+     }
+     
+-    // Extraemos el nombre antes del '@' del correo para saludarlo
+-    nombreJugador.value = usuarioSesion.correo.split('@')[0]
++    usuarioAutenticado.value = usuarioSesion
++    miIdJugador.value = usuarioSesion.id_jugador
++    
++    cargarMisDatosYPartidos()
+ })
+ 
+ const cerrarSesion = () => {
+@@ -35,146 +68,331 @@ const cerrarSesion = () => {
+     router.push('/login')
+ }
+ 
+-const enviarCalificacion = async () => {
+-    // Validar que haya seleccionado una estrella
+-    if (!puntaje.value) {
+-        mensajeError.value = "Por favor, selecciona una calificación de estrellas."
+-        return
+-    }
++// Computadas para separar partidos por jugar y ya jugados
++const partidosProximos = computed(() => partidos.value.filter(p => p.estado === 'Pendiente'))
++const partidosJugados = computed(() => partidos.value.filter(p => p.estado === 'Finalizado'))
+ 
+-    cargando.value = true
+-    mensajeError.value = ''
+-    mensajeExito.value = ''
+-
+-    const payload = {
+-        id_arbitro: parseInt(id_arbitro.value),
+-        id_jugador: parseInt(id_jugador.value),
+-        id_partido: parseInt(id_partido.value),
+-        puntaje: parseInt(puntaje.value)
++// ACCIÓN: Registrar Asistencia
++const marcarAsistencia = async (partido, estado) => {
++    // Si el jugador está suspendido, no puede marcar asistencia
++    if (partido.estoy_suspendido) {
++        alert("No puedes confirmar asistencia porque estás suspendido para este encuentro.")
++        return
+     }
+ 
+     try {
+-        const res = await fetch('http://127.0.0.1:8000/calificar-arbitro', {
++        const payload = {
++            id_partido: partido.id_partido,
++            id_jugador: miIdJugador.value,
++            estado: estado // 'Asistiré' o 'No asistiré'
++        }
++        const res = await fetch('http://127.0.0.1:8000/jugador/asistencia', {
+             method: 'POST',
+-            headers: {'Content-Type': 'application/json'},
++            headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify(payload)
+         })
+ 
+-        const datos = await res.json()
++        if (res.ok) {
++            // Actualizamos la vista sin recargar la página entera
++            partido.mi_asistencia = estado
++        }
++    } catch (error) {
++        alert("Error de conexión al marcar asistencia.")
++    }
++}
+ 
++// ACCIÓN: Ver Camerino Virtual
++const abrirCamerino = async (partido) => {
++    partidoCamerino.value = partido
++    camerinoData.value = []
++    
++    try {
++        const res = await fetch(`http://127.0.0.1:8000/partido/${partido.id_partido}/equipo/${miIdEquipo.value}/asistencias`)
+         if (res.ok) {
+-            mensajeExito.value = datos.mensaje
+-            
+-            // Limpiar el formulario tras el éxito
+-            id_arbitro.value = ''
+-            id_partido.value = ''
+-            id_jugador.value = ''
+-            puntaje.value = ''
++            camerinoData.value = await res.json()
++            mostrarCamerino.value = true
++        }
++    } catch (error) {
++        alert("Error al conectar con el camerino.")
++    }
++}
++
++// ACCIÓN: Calificar Árbitro
++const prepararCalificacion = (partido) => {
++    if (!partido.id_arbitro) {
++        alert("Este partido no tuvo árbitro central asignado.")
++        return
++    }
++    partidoA_Calificar.value = partido
++    puntajeAsignado.value = 0
++    msjCalificacion.value = ''
++    mostrarCalificacion.value = true
++}
++
++const asignarEstrella = (estrella) => {
++    puntajeAsignado.value = estrella
++}
++
++const enviarCalificacion = async () => {
++    if (puntajeAsignado.value === 0) {
++        msjCalificacion.value = "Selecciona al menos una estrella."
++        return
++    }
++    
++    try {
++        const payload = {
++            id_arbitro: partidoA_Calificar.value.id_arbitro,
++            id_jugador: miIdJugador.value,
++            id_partido: partidoA_Calificar.value.id_partido,
++            puntaje: puntajeAsignado.value
++        }
++        
++        const res = await fetch('http://127.0.0.1:8000/jugador/calificar_arbitro', {
++            method: 'POST',
++            headers: { 'Content-Type': 'application/json' },
++            body: JSON.stringify(payload)
++        })
++        
++        const d = await res.json()
++        if (res.ok) {
++            alert(d.mensaje)
++            mostrarCalificacion.value = false
+         } else {
+-            mensajeError.value = datos.detail || "Error al enviar la calificación."
++            msjCalificacion.value = d.detail // Ej: Ya lo calificaste
+         }
+-    } catch (err) {
+-        mensajeError.value = "Error de conexión con el servidor."
+-    } finally {
+-        cargando.value = false
++    } catch (error) {
++        msjCalificacion.value = "Error de red."
+     }
+ }
+ </script>
+ 
+ <template>
+-    <div class="bg-gray-50 font-sans min-h-screen">
++    <div class="bg-gray-100 font-sans min-h-screen pb-20">
+         
++        <!-- NAVBAR -->
+         <nav class="bg-[#001a4d] p-4 shadow-md text-white flex justify-between items-center sticky top-0 z-50">
+-            <div class="flex items-center space-x-2">
+-                <span class="text-xl">🏃‍♂️</span>
+-                <h1 class="text-lg font-bold">Mi Portal</h1>
++            <div class="flex items-center space-x-3">
++                <span class="text-2xl">🏃‍♂️</span>
++                <h1 class="text-xl font-black tracking-wide">Mi Portal</h1>
+             </div>
+-            <button @click="cerrarSesion" class="text-sm font-semibold text-red-300 hover:text-red-100 transition">
+-                Cerrar Sesión
+-            </button>
++            <button @click="cerrarSesion" class="text-blue-200 hover:text-white font-bold text-sm transition">Cerrar Sesión</button>
+         </nav>
+ 
+-        <main class="container mx-auto mt-6 px-4 max-w-md">
++        <main class="container mx-auto mt-6 px-4 max-w-4xl">
+             
+-            <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 mb-6 text-center">
+-                <h2 class="text-xl font-extrabold text-gray-800 capitalize">Hola, {{ nombreJugador }}</h2>
+-                <p class="text-sm text-gray-500 mt-1">Tu opinión ayuda a mejorar la liga.</p>
++            <!-- BIENVENIDA -->
++            <div class="bg-white rounded-3xl shadow-sm border border-gray-200 p-6 mb-8 text-center">
++                <h2 class="text-2xl font-black text-[#001a4d]">Bienvenido a la Cancha</h2>
++                <p class="text-gray-500 text-sm mt-1">Aquí tienes el control de tus asistencias y resultados.</p>
+             </div>
+ 
+-            <div class="bg-white p-6 rounded-xl shadow-md border-t-4 border-[#001a4d]">
+-                <h3 class="text-lg font-bold text-gray-900 mb-4 flex items-center justify-center">
+-                    <span>⚖️ Calificar Árbitro</span>
+-                </h3>
++            <div v-if="cargando" class="text-center py-20 text-gray-400 font-bold animate-pulse">
++                Cargando tu calendario...
++            </div>
+ 
+-                <div v-if="mensajeError" class="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 border border-red-200 text-center font-medium">
+-                    ❌ {{ mensajeError }}
+-                </div>
+-                <div v-if="mensajeExito" class="bg-green-50 text-green-700 p-3 rounded-lg text-sm mb-4 border border-green-200 text-center font-medium">
+-                    ✅ {{ mensajeExito }}
+-                </div>
++            <div v-else class="space-y-12">
+                 
+-                <form @submit.prevent="enviarCalificacion" class="space-y-5">
++                <!-- SECCIÓN: PRÓXIMOS PARTIDOS -->
++                <section>
++                    <h3 class="text-lg font-black text-gray-800 mb-4 flex items-center border-b pb-2">
++                        <span class="mr-2">🔥</span> Próximos Encuentros
++                    </h3>
+                     
+-                    <div class="grid grid-cols-2 gap-4">
+-                        <div>
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">ID Árbitro</label>
+-                            <input v-model="id_arbitro" type="number" required class="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-center focus:ring-2 focus:ring-[#001a4d] outline-none" placeholder="Ej. 1" />
++                    <div class="space-y-5">
++                        <div v-for="partido in partidosProximos" :key="partido.id_partido" 
++                             class="bg-white rounded-3xl shadow-lg border-2 overflow-hidden transition-all"
++                             :class="partido.estoy_suspendido ? 'border-red-400' : 'border-blue-100'">
++                            
++                            <!-- Banner Suspensión -->
++                            <div v-if="partido.estoy_suspendido" class="bg-red-500 text-white text-center py-1.5 font-black text-xs uppercase tracking-widest">
++                                ⚠️ Estás suspendido para este encuentro
++                            </div>
++
++                            <div class="p-5">
++                                <!-- Fecha y Hora -->
++                                <div class="flex justify-between items-center mb-4">
++                                    <span class="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider">📅 {{ partido.fecha }}</span>
++                                    <span class="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-black">⏰ {{ partido.hora }}</span>
++                                </div>
++                                
++                                <!-- Equipos -->
++                                <div class="flex items-center justify-between mt-2">
++                                    <div class="flex flex-col items-center w-[40%] text-center">
++                                        <img v-if="partido.logo_local" :src="partido.logo_local" class="h-12 w-12 object-contain mb-2 drop-shadow-sm" />
++                                        <div v-else class="h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center text-xl mb-2">🛡️</div>
++                                        <span class="font-black text-sm text-[#001a4d] leading-tight">{{ partido.local }}</span>
++                                    </div>
++                                    <span class="text-xs bg-[#001a4d] text-yellow-400 font-black px-3 py-1 rounded-xl shadow-inner">VS</span>
++                                    <div class="flex flex-col items-center w-[40%] text-center">
++                                        <img v-if="partido.logo_visitante" :src="partido.logo_visitante" class="h-12 w-12 object-contain mb-2 drop-shadow-sm" />
++                                        <div v-else class="h-12 w-12 rounded-full bg-gray-100 flex items-center justify-center text-xl mb-2">🛡️</div>
++                                        <span class="font-black text-sm text-[#001a4d] leading-tight">{{ partido.visitante }}</span>
++                                    </div>
++                                </div>
++                            </div>
++                            
++                            <!-- Acciones Jugador -->
++                            <div class="bg-gray-50 border-t p-4">
++                                <p class="text-center text-xs font-bold text-gray-500 mb-3 uppercase">¿Asistirás a este partido?</p>
++                                
++                                <div class="flex space-x-3 mb-4">
++                                    <!-- Botón SÍ -->
++                                    <button @click="marcarAsistencia(partido, 'Asistiré')" :disabled="partido.estoy_suspendido"
++                                            :class="partido.mi_asistencia === 'Asistiré' ? 'bg-green-500 text-white shadow-inner scale-95 border-green-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-green-50 hover:border-green-400 hover:text-green-700'"
++                                            class="w-1/2 py-3 rounded-xl font-black text-sm border-2 transition-all disabled:opacity-50">
++                                        👍 SÍ VOY
++                                    </button>
++                                    
++                                    <!-- Botón NO -->
++                                    <button @click="marcarAsistencia(partido, 'No asistiré')" :disabled="partido.estoy_suspendido"
++                                            :class="partido.mi_asistencia === 'No asistiré' ? 'bg-red-500 text-white shadow-inner scale-95 border-red-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-red-50 hover:border-red-400 hover:text-red-700'"
++                                            class="w-1/2 py-3 rounded-xl font-black text-sm border-2 transition-all disabled:opacity-50">
++                                        👎 NO VOY
++                                    </button>
++                                </div>
++
++                                <button @click="abrirCamerino(partido)" class="w-full bg-[#001a4d] text-yellow-400 font-black py-3 rounded-xl shadow-md transition flex justify-center items-center text-sm">
++                                    <span class="mr-2">👥</span> VER CAMERINO (Compañeros)
++                                </button>
++                            </div>
+                         </div>
+-                        <div>
+-                            <label class="block text-xs font-bold text-gray-700 mb-1">ID Partido</label>
+-                            <input v-model="id_partido" type="number" required class="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-center focus:ring-2 focus:ring-[#001a4d] outline-none" placeholder="Ej. 10" />
++
++                        <div v-if="partidosProximos.length === 0" class="text-center py-10 bg-white rounded-2xl border text-gray-400 text-sm font-bold">
++                            No tienes partidos programados próximamente.
+                         </div>
+                     </div>
++                </section>
+ 
+-                    <div>
+-                        <label class="block text-xs font-bold text-gray-700 mb-1">Mi ID de Jugador</label>
+-                        <input v-model="id_jugador" type="number" required class="w-full p-2 border border-gray-300 rounded-lg bg-gray-50 text-center focus:ring-2 focus:ring-[#001a4d] outline-none" placeholder="Tu ID en la tabla" />
+-                    </div>
++                <!-- SECCIÓN: HISTORIAL Y CALIFICACIONES -->
++                <section>
++                    <h3 class="text-lg font-black text-gray-800 mb-4 flex items-center border-b pb-2">
++                        <span class="mr-2">🏆</span> Historial de Resultados
++                    </h3>
+ 
+-                    <div class="pt-4 border-t border-gray-100">
+-                        <label class="block text-sm font-bold text-center text-gray-700 mb-2">Puntaje del Desempeño</label>
+-                        <div class="rating-container">
+-                            <input v-model="puntaje" type="radio" id="star5" value="5" class="star-radio" />
+-                            <label for="star5" class="star-label">★</label>
+-                            
+-                            <input v-model="puntaje" type="radio" id="star4" value="4" class="star-radio" />
+-                            <label for="star4" class="star-label">★</label>
+-                            
+-                            <input v-model="puntaje" type="radio" id="star3" value="3" class="star-radio" />
+-                            <label for="star3" class="star-label">★</label>
++                    <div class="space-y-4">
++                        <div v-for="partido in partidosJugados" :key="partido.id_partido" 
++                             class="bg-white rounded-2xl shadow-sm border p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                             
+-                            <input v-model="puntaje" type="radio" id="star2" value="2" class="star-radio" />
+-                            <label for="star2" class="star-label">★</label>
++                            <!-- Info Básica -->
++                            <div class="flex flex-col items-center sm:items-start w-full sm:w-auto">
++                                <span class="text-xs font-bold text-gray-400 mb-1">📅 {{ partido.fecha }}</span>
++                                <div class="flex items-center space-x-3 bg-gray-50 px-4 py-2 rounded-xl border">
++                                    <span class="font-black text-[#001a4d]">{{ partido.local }}</span>
++                                    <span class="bg-[#001a4d] text-white px-2 py-0.5 rounded text-sm font-black">{{ partido.goles_local }} - {{ partido.goles_visitante }}</span>
++                                    <span class="font-black text-[#001a4d]">{{ partido.visitante }}</span>
++                                </div>
++                                <span class="text-[10px] text-gray-400 mt-2 font-bold uppercase">Juez: {{ partido.arbitro }}</span>
++                            </div>
++
++                            <!-- Botón Calificar Árbitro -->
++                            <div class="w-full sm:w-auto">
++                                <button @click="prepararCalificacion(partido)" class="w-full sm:w-auto bg-yellow-400 hover:bg-yellow-500 text-[#001a4d] font-black px-5 py-2.5 rounded-xl shadow-sm text-xs transition uppercase flex justify-center items-center">
++                                    <span class="mr-1.5 text-base">⭐</span> Calificar Árbitro
++                                </button>
++                            </div>
++                        </div>
++
++                        <div v-if="partidosJugados.length === 0" class="text-center py-10 bg-white rounded-2xl border text-gray-400 text-sm font-bold">
++                            Aún no has jugado ningún partido oficial.
++                        </div>
++                    </div>
++                </section>
++
++            </div>
++        </main>
++
++        <!-- ========================================== -->
++        <!-- MODAL: CAMERINO VIRTUAL (ASISTENCIAS)      -->
++        <!-- ========================================== -->
++        <div v-if="mostrarCamerino" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
++            <div class="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden flex flex-col border border-gray-200">
++                <div class="bg-[#001a4d] p-5 text-white flex justify-between items-center">
++                    <h3 class="font-black uppercase text-base flex items-center"><span class="mr-2">👥</span> Camerino Virtual</h3>
++                    <button @click="mostrarCamerino = false" class="text-white hover:text-gray-300 font-bold text-xl">✕</button>
++                </div>
++                
++                <div class="bg-blue-50 px-5 py-3 border-b border-blue-100 flex justify-between items-center text-xs font-black text-[#001a4d]">
++                    <span>Lista de Convocados</span>
++                    <span>Total: {{ camerinoData.length }}</span>
++                </div>
++
++                <div class="overflow-y-auto max-h-[60vh] p-5 space-y-3 bg-gray-50">
++                    <div v-for="jugador in camerinoData" :key="jugador.id_jugador" 
++                         class="bg-white border rounded-2xl p-3 flex items-center justify-between shadow-sm">
++                        
++                        <div class="flex items-center space-x-3 w-[70%]">
++                            <img v-if="jugador.url_foto" :src="jugador.url_foto" class="h-10 w-10 object-cover rounded-full border border-gray-200" />
++                            <div v-else class="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center text-xs">👤</div>
+                             
+-                            <input v-model="puntaje" type="radio" id="star1" value="1" class="star-radio" />
+-                            <label for="star1" class="star-label">★</label>
++                            <div class="truncate">
++                                <p class="font-bold text-gray-800 text-sm truncate" :class="{'line-through text-gray-400': jugador.suspendido}">
++                                    {{ jugador.nombre }}
++                                </p>
++                                <span class="bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded text-[10px] font-black">#{{ jugador.numero_camiseta }}</span>
++                            </div>
++                        </div>
++
++                        <!-- Badge de Estado -->
++                        <div class="text-right">
++                            <span v-if="jugador.suspendido" class="bg-red-100 text-red-700 border border-red-200 px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm">
++                                ❌ Sancionado
++                            </span>
++                            <span v-else-if="jugador.estado_asistencia === 'Asistiré'" class="bg-green-100 text-green-700 border border-green-200 px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm">
++                                🟢 Sí Va
++                            </span>
++                            <span v-else-if="jugador.estado_asistencia === 'No asistiré'" class="bg-red-50 text-red-600 border border-red-200 px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm">
++                                🔴 No Va
++                            </span>
++                            <span v-else class="bg-gray-100 text-gray-500 border border-gray-200 px-2 py-1 rounded-lg text-[10px] font-black uppercase shadow-sm">
++                                ⚪ Pendiente
++                            </span>
++                        </div>
++                    </div>
++                </div>
++            </div>
++        </div>
++
++        <!-- ========================================== -->
++        <!-- MODAL: CALIFICAR ÁRBITRO                   -->
++        <!-- ========================================== -->
++        <div v-if="mostrarCalificacion" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
++            <div class="bg-white rounded-3xl shadow-2xl max-w-sm w-full overflow-hidden flex flex-col border border-gray-200">
++                <div class="bg-[#001a4d] p-5 text-white flex justify-between items-center text-center relative">
++                    <h3 class="font-black uppercase text-base w-full">⚖️ Calificar Desempeño</h3>
++                    <button @click="mostrarCalificacion = false" class="text-white hover:text-gray-300 font-bold text-xl absolute right-5">✕</button>
++                </div>
++                
++                <div class="p-8 text-center space-y-6">
++                    <div>
++                        <p class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Árbitro Central</p>
++                        <p class="text-xl font-black text-[#001a4d]">{{ partidoA_Calificar.arbitro }}</p>
++                    </div>
++
++                    <div v-if="msjCalificacion" class="bg-blue-50 text-blue-800 p-2 rounded-lg text-xs font-bold border border-blue-200">
++                        {{ msjCalificacion }}
++                    </div>
++
++                    <div>
++                        <p class="text-sm font-bold text-gray-700 mb-4">¿Cómo fue su arbitraje en el encuentro?</p>
++                        <div class="flex justify-center space-x-2">
++                            <!-- Sistema de 5 Estrellas Interactivo -->
++                            <button v-for="star in 5" :key="star" @click="asignarEstrella(star)"
++                                    class="text-4xl transition-transform hover:scale-125 focus:outline-none"
++                                    :class="star <= puntajeAsignado ? 'text-yellow-400 drop-shadow-md' : 'text-gray-200 hover:text-yellow-200'">
++                                ★
++                            </button>
+                         </div>
++                        <p class="text-[10px] text-gray-400 mt-3 font-bold uppercase">
++                            {{ puntajeAsignado === 0 ? 'Selecciona una puntuación' : puntajeAsignado + ' de 5 Estrellas' }}
++                        </p>
+                     </div>
+ 
+-                    <button type="submit" :disabled="cargando" class="w-full bg-yellow-400 hover:bg-yellow-500 text-blue-900 font-bold py-3 rounded-lg shadow transition mt-4 disabled:opacity-70 flex justify-center items-center">
+-                        <span v-if="cargando" class="inline-block animate-spin rounded-full h-5 w-5 border-2 border-blue-900 border-t-transparent mr-2"></span>
+-                        {{ cargando ? 'Enviando...' : 'Enviar Calificación' }}
++                    <button @click="enviarCalificacion" class="w-full bg-green-600 hover:bg-green-700 text-white font-black py-3 rounded-xl shadow-md transition text-sm">
++                        ENVIAR REPORTE A LA LIGA
+                     </button>
+-                </form>
++                </div>
+             </div>
+-        </main>
++        </div>
++
+     </div>
+-</template>
+-
+-<style scoped>
+-/* Estilos para las estrellas de calificación */
+-.star-radio { display: none; }
+-.star-label { font-size: 2.5rem; color: #d1d5db; cursor: pointer; transition: color 0.2s; }
+-.star-radio:checked ~ .star-label { color: #d1d5db; }
+-.star-label:hover, 
+-.star-label:hover ~ .star-label, 
+-.star-radio:checked + .star-label, 
+-.star-radio:checked + .star-label ~ .star-label { 
+-    color: #FFD700; 
+-}
+-.rating-container { 
+-    display: flex; 
+-    flex-direction: row-reverse; 
+-    justify-content: center; 
+-}
+-</style>
+\ No newline at end of file
++</template>
+\ No newline at end of file
+diff --git a/frontend-liga-vue/src/views/Login.vue b/frontend-liga-vue/src/views/Login.vue
+index ad37e3d..e65872e 100644
+--- a/frontend-liga-vue/src/views/Login.vue
++++ b/frontend-liga-vue/src/views/Login.vue
+@@ -8,6 +8,7 @@ const correo = ref('')
+ const password = ref('')
+ const cargando = ref(false)
+ const mensajeError = ref('')
++const mostrarPassword = ref(false)
+ 
+ const procesarLogin = async () => {
+     if (!correo.value || !password.value) return;
+@@ -93,14 +94,19 @@ const procesarLogin = async () => {
+ 
+                         <div>
+                             <label for="password" class="block text-sm font-semibold text-gray-700 mb-1">Contraseña</label>
+-                            <input 
+-                                v-model="password"
+-                                type="password" 
+-                                id="password" 
+-                                class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
+-                                placeholder="••••••••"
+-                                required
+-                            >
++                            <div class="relative">
++                                <input 
++                                    v-model="password"
++                                    :type="mostrarPassword ? 'text' : 'password'" 
++                                    id="password" 
++                                    class="w-full px-4 py-3 pr-12 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
++                                    placeholder="••••••••"
++                                    required
++                                >
++                                <button type="button" @click="mostrarPassword = !mostrarPassword" class="absolute inset-y-0 right-0 px-4 text-gray-500 hover:text-[#001a4d]" :aria-label="mostrarPassword ? 'Ocultar contraseña' : 'Ver contraseña'">
++                                    {{ mostrarPassword ? '🙈' : '👁️' }}
++                                </button>
++                            </div>
+                         </div>
+ 
+                         <button 
+diff --git a/frontend-liga-vue/src/views/Registro.vue b/frontend-liga-vue/src/views/Registro.vue
+index 144adb5..7952606 100644
+--- a/frontend-liga-vue/src/views/Registro.vue
++++ b/frontend-liga-vue/src/views/Registro.vue
+@@ -13,10 +13,26 @@ const cargando = ref(false)
+ const mensajeError = ref('')
+ const mensajeExito = ref('')
+ 
++const validarPasswordSegura = (valor) => {
++    const texto = (valor || '').trim()
++    if (texto.length < 8) return 'La contraseña debe tener al menos 8 caracteres.'
++    if (!/[A-Z]/.test(texto)) return 'La contraseña debe incluir al menos una mayúscula.'
++    if (!/[a-z]/.test(texto)) return 'La contraseña debe incluir al menos una minúscula.'
++    if (!/\d/.test(texto)) return 'La contraseña debe incluir al menos un número.'
++    if (!/[^A-Za-z0-9]/.test(texto)) return 'La contraseña debe incluir al menos un carácter especial.'
++    return ''
++}
++
+ const registrarse = async () => {
+     mensajeError.value = ''
+     mensajeExito.value = ''
+ 
++    const validacionPassword = validarPasswordSegura(password.value)
++    if (validacionPassword) {
++        mensajeError.value = validacionPassword
++        return
++    }
++
+     if (password.value !== confirmarPassword.value) {
+         mensajeError.value = "Las contraseñas no coinciden. Intenta de nuevo."
+         return
+@@ -27,7 +43,7 @@ const registrarse = async () => {
+     try {
+         const payload = {
+             cedula: cedula.value.trim(),
+-            correo: correo.value.trim(),
++            correo: correo.value.trim().toLowerCase(),
+             password: password.value
+         }
+ 
+@@ -50,7 +66,7 @@ const registrarse = async () => {
+                 router.push('/login')
+             }, 3000)
+         } else {
+-            mensajeError.value = data.detail
++            mensajeError.value = data.detail || 'No se pudo completar el registro.'
+         }
+     } catch (error) {
+         mensajeError.value = "Error de red. No se pudo contactar con el servidor."
+@@ -87,22 +103,30 @@ const registrarse = async () => {
+                     
+                     <div>
+                         <label class="block text-sm font-bold text-gray-700 mb-1">Cédula de Identidad</label>
+-                        <input v-model="cedula" type="text" required placeholder="Tu número de cédula..."
++                           <input v-model="cedula" type="text" required placeholder="Tu número de cédula..."
+                                class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+                         <p class="text-[10px] text-gray-400 mt-1">* Debes estar inscrito previamente por tu equipo.</p>
+                     </div>
+ 
+-                    <div>
+-                        <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
+-                        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
+-                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+-                    </div>
+-
+-                    <div>
+-                        <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
+-                        <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
+-                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+-                    </div>
++                    <!-- Cambia tus campos así: -->
++
++<div>
++    <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
++        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
++           autocomplete="off"
++            style="text-transform: lowercase;"
++           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
++</div>
++
++<div>
++    <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
++    <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
++           autocomplete="new-password"
++           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
++    <p class="text-[11px] text-gray-500 mt-2 leading-5">
++        Usa al menos 8 caracteres, una mayúscula, una minúscula, un número y un símbolo.
++    </p>
++</div>
+ 
+                     <div>
+                         <label class="block text-sm font-bold text-gray-700 mb-1">Confirmar Contraseña</label>
+diff --git a/main.py b/main.py
+index c8d1be0..4259156 100644
+--- a/main.py
++++ b/main.py
+@@ -1,4 +1,6 @@
+-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
++import os
++import re
++from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
+ from pydantic import BaseModel
+ from datetime import date, datetime, timedelta
+ from typing import Optional, List
+@@ -6,6 +8,30 @@ from database import get_db_connection
+ from fastapi.middleware.cors import CORSMiddleware
+ from firebase_service import upload_image_to_firebase
+ 
++FIXTURE_PASSWORD_FILE = os.path.join(os.path.dirname(__file__), "fixture_password.txt")
++
++def _load_fixture_password() -> str:
++    env_password = os.getenv("FIXTURE_PASSWORD", "").strip()
++    if env_password:
++        return env_password
++    if os.path.exists(FIXTURE_PASSWORD_FILE):
++        try:
++            with open(FIXTURE_PASSWORD_FILE, "r", encoding="utf-8") as fh:
++                password = fh.read().strip()
++                if password:
++                    return password
++        except Exception:
++            pass
++    return "LDPConocoto2024"
++
++
++def _save_fixture_password(password: str) -> None:
++    with open(FIXTURE_PASSWORD_FILE, "w", encoding="utf-8") as fh:
++        fh.write(password)
++
++
++FIXTURE_PASSWORD = _load_fixture_password()
++
+ app = FastAPI(
+     title="API Liga Conocoto",
+     description="Backend definitivo para la gestión deportiva de la LDP Conocoto"
+@@ -47,6 +73,7 @@ class UsuarioRegistro(BaseModel):
+ class ArbitroCrear(BaseModel):
+     nombre: str
+     apellido: str
++    cedula: Optional[str] = None
+     experiencia_anios: Optional[int] = None
+     url_foto: Optional[str] = None
+ 
+@@ -56,11 +83,17 @@ class UsuarioLogin(BaseModel):
+ 
+ class GenerarCalendarioRequest(BaseModel):
+     fecha_inicio: date
++    password: str
++
++class FixturePasswordRequest(BaseModel):
++    password: str
+ 
+ class PartidoActualizar(BaseModel):
+     fecha: str
+     hora: str
+     id_arbitro: Optional[int] = None
++    id_arbitro_2: Optional[int] = None
++    id_arbitro_3: Optional[int] = None
+ 
+ class IncidenciaJugadorRequest(BaseModel):
+     id_jugador: int
+@@ -72,6 +105,7 @@ class FinalizarPartidoRequest(BaseModel):
+     goles_local: int
+     goles_visitante: int
+     novedades: Optional[str] = None
++    foto_vocalia_url: Optional[str] = None
+     incidencias: List[IncidenciaJugadorRequest]
+ 
+ class TraspasoRequest(BaseModel):
+@@ -81,6 +115,9 @@ class TraspasoRequest(BaseModel):
+ class CategoriaRequest(BaseModel):
+     nueva_categoria: str
+ 
++class SuspensionRequest(BaseModel):
++    motivo: Optional[str] = None
++
+ # NUEVOS MODELOS PARA EL DASHBOARD DEL JUGADOR
+ class AsistenciaRequest(BaseModel):
+     id_partido: int
+@@ -93,6 +130,74 @@ class CalificacionArbitro(BaseModel):
+     id_partido: int
+     puntaje: int
+ 
++
++def validar_password_segura(password: str) -> str:
++    texto = (password or '').strip()
++    if len(texto) < 8:
++        return 'La contraseña debe tener al menos 8 caracteres.'
++    if not re.search(r'[A-Z]', texto):
++        return 'La contraseña debe incluir al menos una mayúscula.'
++    if not re.search(r'[a-z]', texto):
++        return 'La contraseña debe incluir al menos una minúscula.'
++    if not re.search(r'\d', texto):
++        return 'La contraseña debe incluir al menos un número.'
++    if not re.search(r'[^\w\s]', texto):
++        return 'La contraseña debe incluir al menos un carácter especial.'
++    return ''
++
++
++def normalizar_correo(correo: str) -> str:
++    return (correo or '').strip().lower()
++
++
++def validar_fecha_nacimiento_max_100(fecha_nacimiento: date) -> str:
++    hoy = date.today()
++    if fecha_nacimiento > hoy:
++        return 'La fecha de nacimiento no puede ser futura.'
++    edad = hoy.year - fecha_nacimiento.year - ((hoy.month, hoy.day) < (fecha_nacimiento.month, fecha_nacimiento.day))
++    if edad > 100:
++        return 'La fecha de nacimiento no puede superar los 100 años.'
++    return ''
++
++
++def validar_fecha_fundacion_equipo(fecha_fundacion: Optional[date]) -> str:
++    if fecha_fundacion is None:
++        return ''
++    hoy = date.today()
++    if fecha_fundacion > hoy:
++        return 'La fecha de fundación no puede ser futura.'
++    if fecha_fundacion > hoy - timedelta(days=30):
++        return 'La fecha de fundación debe tener al menos un mes de antigüedad.'
++    return ''
++
++
++def validar_arbitros_distintos(partido: PartidoActualizar) -> str:
++    ids = [partido.id_arbitro, partido.id_arbitro_2, partido.id_arbitro_3]
++    ids_limpios = [valor for valor in ids if valor is not None]
++    if len(ids_limpios) != len(set(ids_limpios)):
++        return 'Los tres árbitros del partido deben ser distintos.'
++    return ''
++
++
++def validar_incidencias_vocalia(req: FinalizarPartidoRequest) -> str:
++    if req.goles_local < 0 or req.goles_visitante < 0:
++        return 'Los goles no pueden ser negativos.'
++    for inc in req.incidencias:
++        if inc.goles < 0:
++            return 'Los goles por jugador no pueden ser negativos.'
++        if inc.amarillas < 0 or inc.amarillas > 2:
++            return 'Las tarjetas amarillas por jugador deben estar entre 0 y 2.'
++        if inc.rojas < 0 or inc.rojas > 1:
++            return 'Las tarjetas rojas por jugador deben estar entre 0 y 1.'
++    return ''
++
++
++def limpiar_fixture(cursor) -> None:
++    cursor.execute('DELETE FROM Calificaciones_Arbitros')
++    cursor.execute('DELETE FROM Asistencia')
++    cursor.execute('DELETE FROM Estadisticas_Jugadores')
++    cursor.execute('DELETE FROM Partidos')
++
+ # ---------------------------------------------------------
+ # 2. RUTAS DE LA API - PANEL ADMINISTRADOR (INTACTAS)
+ # ---------------------------------------------------------
+@@ -116,6 +221,9 @@ def crear_equipo(equipo: EquipoCrear):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
++        if validacion_fecha:
++            raise HTTPException(status_code=400, detail=validacion_fecha)
+         cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ?", (equipo.nombre_equipo,))
+         if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe un equipo registrado con ese nombre exacto.")
+         cursor.execute("INSERT INTO Equipos (Nombre_Equipo, Fecha_Fundacion, Categoria, Url_Logo) VALUES (?, ?, ?, ?)", (equipo.nombre_equipo, equipo.fecha_fundacion, equipo.categoria, equipo.url_logo))
+@@ -130,6 +238,9 @@ def actualizar_equipo(id_equipo: int, equipo: EquipoCrear):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
++        if validacion_fecha:
++            raise HTTPException(status_code=400, detail=validacion_fecha)
+         cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ? AND Id_Equipo <> ?", (equipo.nombre_equipo, id_equipo))
+         if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe otro equipo registrado con ese nombre.")
+         cursor.execute("UPDATE Equipos SET Nombre_Equipo = ?, Categoria = ?, Fecha_Fundacion = ?, Url_Logo = ? WHERE Id_Equipo = ?", (equipo.nombre_equipo, equipo.categoria, equipo.fecha_fundacion, equipo.url_logo, id_equipo))
+@@ -160,8 +271,11 @@ def obtener_jugadores():
+     try:
+         cursor.execute("""
+             SELECT j.Id_Jugador, j.Cedula, j.Nombre, j.Apellido, j.Fecha_Nacimiento, j.Numero_Camiseta, j.Url_Foto, 
+-                   j.Id_Equipo, e.Nombre_Equipo, j.Url_Documento, e.Categoria
+-            FROM Jugadores j LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo ORDER BY j.Id_Jugador DESC
++                   j.Id_Equipo, e.Nombre_Equipo, j.Url_Documento, e.Categoria, s.Fecha_Fin, s.Motivo
++            FROM Jugadores j
++            LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo
++            LEFT JOIN Suspensiones_Jugadores s ON j.Id_Jugador = s.Id_Jugador AND s.Activa = 1 AND s.Fecha_Fin >= CAST(GETDATE() AS DATE)
++            ORDER BY j.Id_Jugador DESC
+         """)
+         lista_jugadores = []
+         for row in cursor.fetchall():
+@@ -169,7 +283,8 @@ def obtener_jugadores():
+                 "id_jugador": row.Id_Jugador, "cedula": row.Cedula, "nombre": row.Nombre, "apellido": row.Apellido,
+                 "fecha_nacimiento": row.Fecha_Nacimiento, "numero_camiseta": row.Numero_Camiseta,
+                 "url_foto": row.Url_Foto, "id_equipo": row.Id_Equipo, "nombre_equipo": row.Nombre_Equipo,
+-                "categoria_equipo": row.Categoria, "url_documento": row.Url_Documento if hasattr(row, 'Url_Documento') else ''
++                "categoria_equipo": row.Categoria, "url_documento": row.Url_Documento if hasattr(row, 'Url_Documento') else '',
++                "suspendido_hasta": row.Fecha_Fin if hasattr(row, 'Fecha_Fin') else None, "motivo_suspension": row.Motivo if hasattr(row, 'Motivo') else ''
+             })
+         return lista_jugadores
+     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+@@ -180,6 +295,12 @@ def crear_jugador(jugador: JugadorCrear):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        validacion_fecha = validar_fecha_nacimiento_max_100(jugador.fecha_nacimiento)
++        if validacion_fecha:
++            raise HTTPException(status_code=400, detail=validacion_fecha)
++        cursor.execute("SELECT 1 FROM Arbitros WHERE Cedula = ?", (jugador.cedula,))
++        if cursor.fetchone():
++            raise HTTPException(status_code=400, detail="No se puede registrar un jugador con una cédula que ya pertenece a un árbitro.")
+         cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Id_Equipo = ? AND Numero_Camiseta = ?", (jugador.id_equipo, jugador.numero_camiseta))
+         if cursor.fetchone(): raise HTTPException(status_code=400, detail=f"¡Error! La camiseta #{jugador.numero_camiseta} ya está asignada.")
+         cursor.execute("""
+@@ -191,7 +312,7 @@ def crear_jugador(jugador: JugadorCrear):
+     except HTTPException: raise 
+     except Exception as e:
+         conn.rollback()
+-        if 'UNIQUE KEY constraint' in str(e): raise HTTPException(status_code=400, detail="Este documento de identidad ya está registrado.")
++        if 'UNIQUE KEY constraint' in str(e): raise HTTPException(status_code=400, detail="La cédula ya está registrada en otro jugador.")
+         raise HTTPException(status_code=500, detail=str(e))
+     finally: conn.close()
+ 
+@@ -228,8 +349,8 @@ def obtener_arbitros():
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("SELECT Id_Arbitro, Nombre, Apellido, Experiencia_Anios, Url_Foto FROM Arbitros ORDER BY Id_Arbitro DESC")
+-        return [{"id_arbitro": r.Id_Arbitro, "nombre": r.Nombre, "apellido": r.Apellido, "experiencia_anios": r.Experiencia_Anios, "url_foto": r.Url_Foto} for r in cursor.fetchall()]
++        cursor.execute("SELECT Id_Arbitro, Nombre, Apellido, Cedula, Experiencia_Anios, Url_Foto FROM Arbitros ORDER BY Id_Arbitro DESC")
++        return [{"id_arbitro": r.Id_Arbitro, "nombre": r.Nombre, "apellido": r.Apellido, "cedula": r.Cedula, "experiencia_anios": r.Experiencia_Anios, "url_foto": r.Url_Foto} for r in cursor.fetchall()]
+     finally: conn.close()
+ 
+ @app.post("/arbitros")
+@@ -237,37 +358,85 @@ def crear_arbitro(arbitro: ArbitroCrear):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("INSERT INTO Arbitros (Nombre, Apellido, Experiencia_Anios, Url_Foto) VALUES (?, ?, ?, ?)", (arbitro.nombre, arbitro.apellido, arbitro.experiencia_anios, arbitro.url_foto))
++        cedula = arbitro.cedula.strip() if arbitro.cedula else None
++        if cedula:
++            cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Cedula = ?", (cedula,))
++            if cursor.fetchone():
++                raise HTTPException(status_code=400, detail="No se puede registrar un árbitro con una cédula que ya pertenece a un jugador.")
++            cursor.execute("SELECT Id_Arbitro FROM Arbitros WHERE Cedula = ?", (cedula,))
++            if cursor.fetchone():
++                raise HTTPException(status_code=400, detail="Ya existe un árbitro registrado con esa cédula.")
++        cursor.execute("INSERT INTO Arbitros (Nombre, Apellido, Cedula, Experiencia_Anios, Url_Foto) VALUES (?, ?, ?, ?, ?)", (arbitro.nombre, arbitro.apellido, cedula, arbitro.experiencia_anios, arbitro.url_foto))
+         conn.commit()
+         return {"mensaje": f"Árbitro {arbitro.nombre} registrado exitosamente."}
++    except HTTPException: raise
+     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
+     finally: conn.close()
+ 
++@app.post("/config/fixture-password")
++def configurar_password_fixture(req: FixturePasswordRequest):
++    global FIXTURE_PASSWORD
++    if not req.password or not req.password.strip():
++        raise HTTPException(status_code=400, detail="La contraseña no puede estar vacía.")
++    password = req.password.strip()
++    FIXTURE_PASSWORD = password
++    _save_fixture_password(password)
++    return {"mensaje": "Contraseña del fixture actualizada."}
++
++
++@app.delete("/partidos/fixture")
++def borrar_fixture(req: FixturePasswordRequest = Body(...)):
++    conn = get_db_connection()
++    cursor = conn.cursor()
++    try:
++        if req.password != FIXTURE_PASSWORD:
++            raise HTTPException(status_code=401, detail="Contraseña incorrecta para borrar el fixture.")
++        limpiar_fixture(cursor)
++        conn.commit()
++        return {"mensaje": "Fixture eliminado correctamente."}
++    except HTTPException:
++        raise
++    except Exception as e:
++        conn.rollback()
++        raise HTTPException(status_code=500, detail=str(e))
++    finally:
++        conn.close()
++
+ @app.get("/partidos")
+ def obtener_partidos():
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+         cursor.execute("""
+-            SELECT p.Id_Partido, p.Fecha_Hora, p.Estado, p.Goles_Local, p.Goles_Visitante, p.Id_Arbitro,
+-                   el.Nombre_Equipo AS Local, ev.Nombre_Equipo AS Visitante,
+-                   a.Nombre AS Arbitro_Nombre, a.Apellido AS Arbitro_Apellido
++                 SELECT p.Id_Partido, p.Fecha_Hora, p.Estado, p.Goles_Local, p.Goles_Visitante, p.Id_Arbitro, p.Id_Arbitro_2, p.Id_Arbitro_3,
++                     el.Nombre_Equipo AS Local, el.Categoria AS Categoria_Local,
++                     ev.Nombre_Equipo AS Visitante, ev.Categoria AS Categoria_Visitante,
++                   a1.Nombre AS Arbitro1_Nombre, a1.Apellido AS Arbitro1_Apellido,
++                   a2.Nombre AS Arbitro2_Nombre, a2.Apellido AS Arbitro2_Apellido,
++                   a3.Nombre AS Arbitro3_Nombre, a3.Apellido AS Arbitro3_Apellido
+             FROM Partidos p
+             INNER JOIN Equipos el ON p.Id_Equipo_Local = el.Id_Equipo
+             INNER JOIN Equipos ev ON p.Id_Equipo_Visitante = ev.Id_Equipo
+-            LEFT JOIN Arbitros a ON p.Id_Arbitro = a.Id_Arbitro
++            LEFT JOIN Arbitros a1 ON p.Id_Arbitro = a1.Id_Arbitro
++            LEFT JOIN Arbitros a2 ON p.Id_Arbitro_2 = a2.Id_Arbitro
++            LEFT JOIN Arbitros a3 ON p.Id_Arbitro_3 = a3.Id_Arbitro
+             ORDER BY p.Fecha_Hora ASC
+         """)
+         partidos = []
+         for r in cursor.fetchall():
+-            arbitro_str = f"{r.Arbitro_Nombre} {r.Arbitro_Apellido}" if r.Arbitro_Nombre else "Sin asignar"
++            arbitros_partido = [f"{r.Arbitro1_Nombre} {r.Arbitro1_Apellido}" if r.Arbitro1_Nombre else None,
++                                f"{r.Arbitro2_Nombre} {r.Arbitro2_Apellido}" if r.Arbitro2_Nombre else None,
++                                f"{r.Arbitro3_Nombre} {r.Arbitro3_Apellido}" if r.Arbitro3_Nombre else None]
++            arbitro_str = " / ".join([a for a in arbitros_partido if a]) or "Sin asignar"
+             partidos.append({
+                 "id_partido": r.Id_Partido, "local": r.Local, "visitante": r.Visitante,
++                "categoria_local": r.Categoria_Local, "categoria_visitante": r.Categoria_Visitante,
+                 "fecha": r.Fecha_Hora.strftime("%Y-%m-%d") if r.Fecha_Hora else "",
+                 "hora": r.Fecha_Hora.strftime("%H:%M") if r.Fecha_Hora else "",
+                 "goles_local": r.Goles_Local if r.Goles_Local is not None else 0,
+                 "goles_visitante": r.Goles_Visitante if r.Goles_Visitante is not None else 0,
+-                "estado": r.Estado, "arbitro": arbitro_str, "id_arbitro": r.Id_Arbitro
++                "estado": r.Estado, "arbitro": arbitro_str, "id_arbitro": r.Id_Arbitro,
++                "id_arbitro_2": r.Id_Arbitro_2, "id_arbitro_3": r.Id_Arbitro_3
+             })
+         return partidos
+     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+@@ -278,17 +447,23 @@ def actualizar_partido(id_partido: int, partido: PartidoActualizar):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        validacion_arbitros = validar_arbitros_distintos(partido)
++        if validacion_arbitros:
++            raise HTTPException(status_code=400, detail=validacion_arbitros)
+         fecha_hora_str = f"{partido.fecha} {partido.hora}"
+         fecha_hora_dt = datetime.strptime(fecha_hora_str, "%Y-%m-%d %H:%M")
+         cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Fecha_Hora = ? AND Id_Partido <> ?", (fecha_hora_dt, id_partido))
+         if cursor.fetchone().total > 0: raise HTTPException(status_code=400, detail="¡Conflicto de Horario! Ya existe otro partido programado en esa misma fecha y hora.")
+-        cursor.execute("UPDATE Partidos SET Fecha_Hora = ?, Id_Arbitro = ? WHERE Id_Partido = ?", (fecha_hora_dt, partido.id_arbitro, id_partido))
++        cursor.execute("UPDATE Partidos SET Fecha_Hora = ?, Id_Arbitro = ?, Id_Arbitro_2 = ?, Id_Arbitro_3 = ? WHERE Id_Partido = ?", (fecha_hora_dt, partido.id_arbitro, partido.id_arbitro_2, partido.id_arbitro_3, id_partido))
+         conn.commit()
+         return {"mensaje": "El partido ha sido reprogramado con éxito."}
+     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
+     finally: conn.close()
+ 
+ def calcular_si_esta_suspendido(cursor, id_jugador: int, id_equipo: int) -> bool:
++    cursor.execute("SELECT TOP 1 1 FROM Suspensiones_Jugadores WHERE Id_Jugador = ? AND Activa = 1 AND Fecha_Fin >= CAST(GETDATE() AS DATE)", (id_jugador,))
++    if cursor.fetchone():
++        return True
+     cursor.execute("""
+         SELECT p.Id_Partido, ISNULL(ej.Tarjetas_Amarillas, 0) as A, ISNULL(ej.Tarjetas_Rojas, 0) as R
+         FROM Partidos p LEFT JOIN Estadisticas_Jugadores ej ON p.Id_Partido = ej.Id_Partido AND ej.Id_Jugador = ?
+@@ -329,7 +504,10 @@ def finalizar_partido(id_partido: int, req: FinalizarPartidoRequest):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("UPDATE Partidos SET Goles_Local = ?, Goles_Visitante = ?, Estado = 'Finalizado', Novedades = ? WHERE Id_Partido = ?", (req.goles_local, req.goles_visitante, req.novedades, id_partido))
++        validacion = validar_incidencias_vocalia(req)
++        if validacion:
++            raise HTTPException(status_code=400, detail=validacion)
++        cursor.execute("UPDATE Partidos SET Goles_Local = ?, Goles_Visitante = ?, Estado = 'Finalizado', Novedades = ?, Url_Foto_Vocalia = ? WHERE Id_Partido = ?", (req.goles_local, req.goles_visitante, req.novedades, req.foto_vocalia_url, id_partido))
+         for inc in req.incidencias:
+             if inc.goles > 0 or inc.amarillas > 0 or inc.rojas > 0:
+                 cursor.execute("INSERT INTO Estadisticas_Jugadores (Id_Jugador, Id_Partido, Goles, Tarjetas_Amarillas, Tarjetas_Rojas) VALUES (?, ?, ?, ?, ?)", (inc.id_jugador, id_partido, inc.goles, inc.amarillas, inc.rojas))
+@@ -343,7 +521,7 @@ def obtener_detalles_acta(id_partido: int):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("SELECT Novedades, Id_Equipo_Local, Id_Equipo_Visitante FROM Partidos WHERE Id_Partido = ?", (id_partido,))
++        cursor.execute("SELECT Novedades, Id_Equipo_Local, Id_Equipo_Visitante, Url_Foto_Vocalia FROM Partidos WHERE Id_Partido = ?", (id_partido,))
+         partido = cursor.fetchone()
+         cursor.execute("""
+             SELECT j.Nombre, j.Apellido, j.Id_Equipo, ej.Goles, ej.Tarjetas_Amarillas, ej.Tarjetas_Rojas
+@@ -360,6 +538,7 @@ def obtener_detalles_acta(id_partido: int):
+ 
+         return {
+             "novedades": partido.Novedades if hasattr(partido, 'Novedades') and partido.Novedades else "Ninguna novedad registrada durante el encuentro.",
++            "foto_vocalia_url": partido.Url_Foto_Vocalia if hasattr(partido, 'Url_Foto_Vocalia') and partido.Url_Foto_Vocalia else None,
+             "incidencias_local": incidencias_local, "incidencias_visitante": incidencias_visitante
+         }
+     except Exception as e: raise HTTPException(status_code=500, detail=str(e))
+@@ -414,6 +593,9 @@ def realizar_traspaso_jugador(id_jugador: int, req: TraspasoRequest):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Estado <> 'Finalizado'")
++        if cursor.fetchone().total > 0:
++            raise HTTPException(status_code=400, detail="Los traspasos quedan bloqueados hasta que se jueguen todos los partidos del torneo.")
+         cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Id_Equipo = ? AND Numero_Camiseta = ?", (req.id_nuevo_equipo, req.nuevo_numero_camiseta))
+         if cursor.fetchone(): raise HTTPException(status_code=400, detail=f"¡Conflicto de dorsal! El número #{req.nuevo_numero_camiseta} ya está ocupado en ese equipo.")
+         cursor.execute("UPDATE Jugadores SET Id_Equipo = ?, Numero_Camiseta = ? WHERE Id_Jugador = ?", (req.id_nuevo_equipo, req.nuevo_numero_camiseta, id_jugador))
+@@ -428,6 +610,9 @@ def cambiar_categoria_equipo(id_equipo: int, req: CategoriaRequest):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
++        cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Estado <> 'Finalizado'")
++        if cursor.fetchone().total > 0:
++            raise HTTPException(status_code=400, detail="Los cambios de categoría quedan bloqueados hasta que se completen todos los partidos.")
+         cursor.execute("UPDATE Equipos SET Categoria = ? WHERE Id_Equipo = ?", (req.nueva_categoria, id_equipo))
+         conn.commit()
+         return {"mensaje": "Categoría modificada correctamente."}
+@@ -464,7 +649,9 @@ def generar_calendario(req: GenerarCalendarioRequest):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("DELETE FROM Partidos")
++        if req.password != FIXTURE_PASSWORD:
++            raise HTTPException(status_code=401, detail="Contraseña incorrecta para generar el fixture.")
++        limpiar_fixture(cursor)
+         p_primera = generar_round_robin_por_categoria(cursor, "Primera", req.fecha_inicio)
+         p_maxima = generar_round_robin_por_categoria(cursor, "Máxima", req.fecha_inicio + timedelta(days=1))
+         todos = p_primera + p_maxima
+@@ -474,12 +661,54 @@ def generar_calendario(req: GenerarCalendarioRequest):
+         return {"mensaje": f"¡Torneo unificado generado! {len(todos)} partidos cargados."}
+     finally: conn.close()
+ 
++@app.get("/jugadores/suspendidos")
++def obtener_jugadores_suspendidos():
++    conn = get_db_connection()
++    cursor = conn.cursor()
++    try:
++        cursor.execute("""
++            SELECT j.Id_Jugador, j.Nombre, j.Apellido, j.Cedula, e.Nombre_Equipo, s.Fecha_Inicio, s.Fecha_Fin, s.Motivo
++            FROM Suspensiones_Jugadores s
++            INNER JOIN Jugadores j ON s.Id_Jugador = j.Id_Jugador
++            LEFT JOIN Equipos e ON j.Id_Equipo = e.Id_Equipo
++            WHERE s.Activa = 1 AND s.Fecha_Fin >= CAST(GETDATE() AS DATE)
++            ORDER BY s.Fecha_Fin DESC
++        """)
++        return [{"id_jugador": r.Id_Jugador, "nombre": r.Nombre, "apellido": r.Apellido, "cedula": r.Cedula, "equipo": r.Nombre_Equipo, "fecha_inicio": r.Fecha_Inicio, "fecha_fin": r.Fecha_Fin, "motivo": r.Motivo} for r in cursor.fetchall()]
++    finally: conn.close()
++
++@app.post("/jugadores/{id_jugador}/suspender")
++def suspender_jugador(id_jugador: int, req: SuspensionRequest):
++    conn = get_db_connection()
++    cursor = conn.cursor()
++    try:
++        fecha_inicio = date.today()
++        fecha_fin = fecha_inicio + timedelta(days=365)
++        cursor.execute("UPDATE Suspensiones_Jugadores SET Activa = 0 WHERE Id_Jugador = ?", (id_jugador,))
++        cursor.execute("INSERT INTO Suspensiones_Jugadores (Id_Jugador, Fecha_Inicio, Fecha_Fin, Motivo, Activa) VALUES (?, ?, ?, ?, 1)", (id_jugador, fecha_inicio, fecha_fin, req.motivo))
++        conn.commit()
++        return {"mensaje": "Jugador suspendido por un año correctamente."}
++    except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
++    finally: conn.close()
++
++@app.delete("/jugadores/{id_jugador}/suspender")
++def quitar_suspension_jugador(id_jugador: int):
++    conn = get_db_connection()
++    cursor = conn.cursor()
++    try:
++        cursor.execute("UPDATE Suspensiones_Jugadores SET Activa = 0 WHERE Id_Jugador = ?", (id_jugador,))
++        conn.commit()
++        return {"mensaje": "Suspensión removida correctamente."}
++    except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
++    finally: conn.close()
++
+ @app.post("/login")
+ def iniciar_sesion(credenciales: UsuarioLogin):
+     conn = get_db_connection()
+     cursor = conn.cursor()
+     try:
+-        cursor.execute("SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador FROM Usuarios WHERE Correo = ?", (credenciales.correo,))
++        correo_normalizado = normalizar_correo(credenciales.correo)
++        cursor.execute("SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador FROM Usuarios WHERE LOWER(Correo) = ?", (correo_normalizado,))
+         u = cursor.fetchone()
+         if not u or credenciales.password != u.Password_Hash: raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+         return {"usuario": {"id": u.Id_Usuario, "correo": u.Correo, "rol": u.Rol, "id_jugador": u.Id_Jugador if hasattr(u, 'Id_Jugador') else None}}
+@@ -638,15 +867,20 @@ def registrar_usuario(req: UsuarioRegistro):
+             raise HTTPException(status_code=400, detail="Este jugador ya tiene una cuenta registrada en el sistema.")
+             
+         # 3. Validar que el correo no esté en uso
+-        cursor.execute("SELECT Id_Usuario FROM Usuarios WHERE Correo = ?", (req.correo,))
++        correo_normalizado = normalizar_correo(req.correo)
++        cursor.execute("SELECT Id_Usuario FROM Usuarios WHERE LOWER(Correo) = ?", (correo_normalizado,))
+         if cursor.fetchone():
+-            raise HTTPException(status_code=400, detail="Este correo electrónico ya está en uso.")
++            raise HTTPException(status_code=400, detail="Este correo electrónico ya está en uso, sin importar mayúsculas o minúsculas.")
++
++        validacion_password = validar_password_segura(req.password)
++        if validacion_password:
++            raise HTTPException(status_code=400, detail=validacion_password)
+             
+         # 4. Insertar en la tabla Usuarios vinculándolo con su Id_Jugador
+         cursor.execute("""
+             INSERT INTO Usuarios (Correo, Password_Hash, Rol, Id_Jugador)
+             VALUES (?, ?, 'Jugador', ?)
+-        """, (req.correo, req.password, id_jugador))
++        """, (correo_normalizado, req.password, id_jugador))
+         conn.commit()
+         
+         return {"mensaje": f"¡Bienvenido {jugador.Nombre}! Tu cuenta ha sido creada exitosamente. Ya puedes iniciar sesión."}
