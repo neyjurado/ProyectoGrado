@@ -707,12 +707,22 @@ def iniciar_sesion(credenciales: UsuarioLogin):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        correo_normalizado = normalizar_correo(credenciales.correo)
-        cursor.execute("SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador FROM Usuarios WHERE LOWER(Correo) = ?", (correo_normalizado,))
+        # Usamos COLLATE SQL_Latin1_General_CP1_CS_AS para forzar la validación exacta 
+        # de mayúsculas y minúsculas (Case Sensitive) directamente en la base de datos.
+        cursor.execute("""
+            SELECT Id_Usuario, Correo, Password_Hash, Rol, Id_Jugador 
+            FROM Usuarios 
+            WHERE Correo COLLATE SQL_Latin1_General_CP1_CS_AS = ?
+        """, (credenciales.correo,))
+        
         u = cursor.fetchone()
-        if not u or credenciales.password != u.Password_Hash: raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+        
+        if not u or credenciales.password != u.Password_Hash: 
+            raise HTTPException(status_code=401, detail="Credenciales incorrectas")
+            
         return {"usuario": {"id": u.Id_Usuario, "correo": u.Correo, "rol": u.Rol, "id_jugador": u.Id_Jugador if hasattr(u, 'Id_Jugador') else None}}
-    finally: conn.close()
+    finally: 
+        conn.close()
 
 @app.post("/upload-image")
 async def upload_image(file: UploadFile = File(...), folder: Optional[str] = Form("images")):

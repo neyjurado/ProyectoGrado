@@ -72,7 +72,7 @@ const partidosCalendarioPendientes = computed(() => partidosCalendario.value.fil
 const partidosCalendarioFinalizados = computed(() => partidosCalendario.value.filter(p => p.estado === 'Finalizado'))
 
 const filtrosCalendario = computed(() => [
-    { nombre: 'Todas', icono: '🗂️' },
+    { nombre: 'Todas', icono: '📅' },
     ...categorias
 ])
 

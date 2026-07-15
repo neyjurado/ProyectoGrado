@@ -272,37 +272,9 @@ const registrarArbitro = async () => { cargandoArbitro.value = true; msjErrorArb
 
 // CALENDARIO Y VOCALÍA
 const obtenerPasswordFixture = async () => {
-    const passwordGuardado = localStorage.getItem('fixture_password')
-    if (passwordGuardado) {
-        const passwordIngresado = window.prompt('Ingresa la contraseña para generar el fixture', '')
-        if (!passwordIngresado) return null
-        if (passwordIngresado !== passwordGuardado) {
-            alert('La contraseña es incorrecta.')
-            return null
-        }
-        return passwordIngresado
-    }
-
-    const passwordNuevo = window.prompt('Crea una contraseña para generar nuevos fixtures', '')
-    if (!passwordNuevo || !passwordNuevo.trim()) return null
-
-    try {
-        const res = await fetch('http://127.0.0.1:8000/config/fixture-password', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: passwordNuevo.trim() })
-        })
-        if (!res.ok) {
-            const data = await res.json().catch(() => ({}))
-            alert(data.detail || 'No se pudo guardar la contraseña.')
-            return null
-        }
-        localStorage.setItem('fixture_password', passwordNuevo.trim())
-        return passwordNuevo.trim()
-    } catch (e) {
-        alert('No se pudo guardar la contraseña del fixture.')
-        return null
-    }
+    const passwordIngresado = window.prompt('Ingresa la contraseña para generar el fixture', '')
+    if (!passwordIngresado || !passwordIngresado.trim()) return null
+    return passwordIngresado.trim()
 }
 
 const generarFixtureConPassword = async (password) => {

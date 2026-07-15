@@ -30,7 +30,7 @@ const procesarLogin = async () => {
         if (respuesta.ok) {
             localStorage.setItem('usuario', JSON.stringify(datos.usuario));
             
-            // Redirección silenciosa y directa (sin alertas)
+            // Redirección silenciosa y directa
             if (datos.usuario.rol === 'Administrador') {
                 router.push('/admin'); 
             } else if (datos.usuario.rol === 'Jugador') {
@@ -86,6 +86,7 @@ const procesarLogin = async () => {
                                 v-model="correo"
                                 type="email" 
                                 id="correo" 
+                                autocomplete="nope"
                                 class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
                                 placeholder="ejemplo@correo.com"
                                 required
@@ -99,6 +100,7 @@ const procesarLogin = async () => {
                                     v-model="password"
                                     :type="mostrarPassword ? 'text' : 'password'" 
                                     id="password" 
+                                    autocomplete="new-password"
                                     class="w-full px-4 py-3 pr-12 rounded-lg border border-gray-300 focus:ring-2 focus:ring-[#001a4d] focus:border-transparent outline-none transition"
                                     placeholder="••••••••"
                                     required

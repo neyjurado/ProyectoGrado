@@ -80,7 +80,6 @@ const registrarse = async () => {
     <div class="min-h-screen bg-gray-100 flex flex-col justify-center items-center p-4 font-sans">
         
         <div class="max-w-md w-full bg-white rounded-3xl shadow-xl overflow-hidden border border-gray-200">
-            <!-- Encabezado -->
             <div class="bg-[#001a4d] p-6 text-center">
                 <div class="bg-white inline-flex p-3 rounded-full shadow-lg mb-3">
                     <span class="text-3xl">⚽</span>
@@ -89,7 +88,6 @@ const registrarse = async () => {
                 <p class="text-blue-200 text-sm mt-1">Liga Deportiva Parroquial de Conocoto</p>
             </div>
 
-            <!-- Formulario -->
             <div class="p-8">
                 <div v-if="mensajeError" class="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm font-bold mb-4 flex items-center">
                     ⚠️ {{ mensajeError }}
@@ -103,34 +101,33 @@ const registrarse = async () => {
                     
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-1">Cédula de Identidad</label>
-                           <input v-model="cedula" type="text" required placeholder="Tu número de cédula..."
+                        <input v-model="cedula" type="text" required placeholder="Tu número de cédula..." autocomplete="nope"
                                class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
                         <p class="text-[10px] text-gray-400 mt-1">* Debes estar inscrito previamente por tu equipo.</p>
                     </div>
 
-                    <!-- Cambia tus campos así: -->
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
+                        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
+                               autocomplete="nope"
+                               style="text-transform: lowercase;"
+                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+                    </div>
 
-<div>
-    <label class="block text-sm font-bold text-gray-700 mb-1">Correo Electrónico</label>
-        <input v-model="correo" type="email" required placeholder="nombre.apellido@ligaconocoto.com"
-           autocomplete="off"
-            style="text-transform: lowercase;"
-           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
-</div>
-
-<div>
-    <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
-    <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
-           autocomplete="new-password"
-           class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
-    <p class="text-[11px] text-gray-500 mt-2 leading-5">
-        Usa al menos 8 caracteres, una mayúscula, una minúscula, un número y un símbolo.
-    </p>
-</div>
+                    <div>
+                        <label class="block text-sm font-bold text-gray-700 mb-1">Contraseña</label>
+                        <input v-model="password" type="password" required placeholder="Crea una contraseña segura"
+                               autocomplete="new-password"
+                               class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
+                        <p class="text-[11px] text-gray-500 mt-2 leading-5">
+                            Usa al menos 8 caracteres, una mayúscula, una minúscula, un número y un símbolo.
+                        </p>
+                    </div>
 
                     <div>
                         <label class="block text-sm font-bold text-gray-700 mb-1">Confirmar Contraseña</label>
                         <input v-model="confirmarPassword" type="password" required placeholder="Repite tu contraseña"
+                               autocomplete="new-password"
                                class="w-full p-3 bg-gray-50 border border-gray-300 rounded-xl outline-none focus:border-[#001a4d] focus:bg-white transition" />
                     </div>
 
@@ -149,6 +146,5 @@ const registrarse = async () => {
                 </div>
             </div>
         </div>
-
     </div>
 </template>
