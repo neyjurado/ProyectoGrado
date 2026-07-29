@@ -23,9 +23,31 @@ const validarPasswordSegura = (valor) => {
     return ''
 }
 
+const validarChecksumCedula = (cedula) => {
+    if (!/^[0-9]{10}$/.test(cedula)) return false
+    const provincia = parseInt(cedula.slice(0, 2), 10)
+    const tercerDigito = parseInt(cedula[2], 10)
+    if (!((provincia >= 1 && provincia <= 24) || provincia === 30)) return false
+    if (tercerDigito > 5) return false
+    const coeficientes = [2, 1, 2, 1, 2, 1, 2, 1, 2]
+    let suma = 0
+    for (let i = 0; i < 9; i++) {
+        let producto = parseInt(cedula[i], 10) * coeficientes[i]
+        if (producto > 9) producto -= 9
+        suma += producto
+    }
+    const verificador = (10 - (suma % 10)) % 10
+    return verificador === parseInt(cedula[9], 10)
+}
+
 const registrarse = async () => {
     mensajeError.value = ''
     mensajeExito.value = ''
+
+    if (!validarChecksumCedula(cedula.value.trim())) {
+        mensajeError.value = 'La cédula ingresada no es válida (debe pertenecer a una provincia ecuatoriana 01-24 o 30 y tener 10 dígitos con el verificador correcto).'
+        return
+    }
 
     const validacionPassword = validarPasswordSegura(password.value)
     if (validacionPassword) {

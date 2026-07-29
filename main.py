@@ -17,7 +17,15 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
+    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,6 +47,7 @@ class JugadorCrear(BaseModel):
 
 class EquipoCrear(BaseModel):
     nombre_equipo: str
+    presidente: Optional[str] = None
     fecha_fundacion: Optional[date] = None
     categoria: str
     url_logo: Optional[str] = None
@@ -197,16 +206,31 @@ def validar_arbitros_distintos(partido: PartidoActualizar) -> str:
     return ''
 
 
+def normalizar_nombre_equipo(nombre: str) -> str:
+    if not nombre:
+        return ""
+    return re.sub(r'\s+', ' ', nombre.strip()).upper()
+
+
+def validar_nombre_equipo(nombre: str) -> str:
+    nombre_limpio = normalizar_nombre_equipo(nombre)
+    if len(nombre_limpio) < 2:
+        return 'El nombre del equipo debe tener al menos 2 caracteres válidos.'
+    if len(nombre_limpio) > 50:
+        return 'El nombre del equipo no puede exceder los 50 caracteres.'
+    return ''
+
+
 def validar_cedula_ecuatoriana(cedula: str) -> str:
     texto = (cedula or '').strip()
     if not re.fullmatch(r'\d{10}', texto):
         return 'La cédula debe tener exactamente 10 dígitos numéricos.'
     provincia = int(texto[0:2])
     tercer_digito = int(texto[2])
-    if not (1 <= provincia <= 24 or provincia == 30):
-        return 'La cédula no tiene un código de provincia válido.'
-    if tercer_digito > 6:
-        return 'La cédula no tiene un tercer dígito válido.'
+    if not ((1 <= provincia <= 24) or provincia == 30):
+        return 'La cédula no pertenece a un código de provincia válido (01-24 o 30).'
+    if tercer_digito > 5:
+        return 'La cédula no tiene un tercer dígito válido para persona natural.'
     coeficientes = [2, 1, 2, 1, 2, 1, 2, 1, 2]
     suma = 0
     for digito, coeficiente in zip(texto[:9], coeficientes):
@@ -266,8 +290,15 @@ def obtener_equipos():
     conn = get_db_connection()
     if not conn: raise HTTPException(status_code=500, detail="Error de BD")
     cursor = conn.cursor()
-    cursor.execute("SELECT Id_Equipo, Nombre_Equipo, Categoria, Url_Logo, Fecha_Fundacion FROM Equipos")
-    equipos = [{"id": r.Id_Equipo, "nombre": r.Nombre_Equipo, "categoria": r.Categoria, "url_logo": r.Url_Logo, "fecha_fundacion": r.Fecha_Fundacion.strftime("%Y-%m-%d") if r.Fecha_Fundacion else None} for r in cursor.fetchall()]
+    cursor.execute("SELECT Id_Equipo, Nombre_Equipo, Categoria, Url_Logo, Fecha_Fundacion, Presidente FROM Equipos")
+    equipos = [{
+        "id": r.Id_Equipo,
+        "nombre": r.Nombre_Equipo,
+        "categoria": r.Categoria,
+        "url_logo": r.Url_Logo,
+        "fecha_fundacion": r.Fecha_Fundacion.strftime("%Y-%m-%d") if r.Fecha_Fundacion else None,
+        "presidente": r.Presidente or ""
+    } for r in cursor.fetchall()]
     conn.close()
     return equipos
 
@@ -276,14 +307,23 @@ def crear_equipo(equipo: EquipoCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        nombre_normalizado = normalizar_nombre_equipo(equipo.nombre_equipo)
+        err_nombre = validar_nombre_equipo(nombre_normalizado)
+        if err_nombre:
+            raise HTTPException(status_code=400, detail=err_nombre)
+        if equipo.categoria not in ('Primera', 'Máxima'):
+            raise HTTPException(status_code=400, detail="Por favor selecciona una categoría válida ('Primera' o 'Máxima').")
         validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
         if validacion_fecha:
             raise HTTPException(status_code=400, detail=validacion_fecha)
-        cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ?", (equipo.nombre_equipo,))
-        if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe un equipo registrado con ese nombre exacto.")
-        cursor.execute("INSERT INTO Equipos (Nombre_Equipo, Fecha_Fundacion, Categoria, Url_Logo) VALUES (?, ?, ?, ?)", (equipo.nombre_equipo, equipo.fecha_fundacion, equipo.categoria, equipo.url_logo))
+        cursor.execute("SELECT Id_Equipo, Nombre_Equipo FROM Equipos")
+        equipos_existentes = cursor.fetchall()
+        if any(normalizar_nombre_equipo(r.Nombre_Equipo) == nombre_normalizado for r in equipos_existentes):
+            raise HTTPException(status_code=400, detail="¡Atención! Ya existe un equipo registrado con ese nombre.")
+        pres_val = equipo.presidente.strip() if equipo.presidente and equipo.presidente.strip() else None
+        cursor.execute("INSERT INTO Equipos (Nombre_Equipo, Fecha_Fundacion, Categoria, Url_Logo, Presidente) VALUES (?, ?, ?, ?, ?)", (nombre_normalizado, equipo.fecha_fundacion, equipo.categoria, equipo.url_logo, pres_val))
         conn.commit()
-        return {"mensaje": f"Equipo '{equipo.nombre_equipo}' creado exitosamente."}
+        return {"mensaje": f"Equipo '{nombre_normalizado}' creado exitosamente."}
     except HTTPException: raise
     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
@@ -293,12 +333,21 @@ def actualizar_equipo(id_equipo: int, equipo: EquipoCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        nombre_normalizado = normalizar_nombre_equipo(equipo.nombre_equipo)
+        err_nombre = validar_nombre_equipo(nombre_normalizado)
+        if err_nombre:
+            raise HTTPException(status_code=400, detail=err_nombre)
+        if equipo.categoria not in ('Primera', 'Máxima'):
+            raise HTTPException(status_code=400, detail="Por favor selecciona una categoría válida ('Primera' o 'Máxima').")
         validacion_fecha = validar_fecha_fundacion_equipo(equipo.fecha_fundacion)
         if validacion_fecha:
             raise HTTPException(status_code=400, detail=validacion_fecha)
-        cursor.execute("SELECT Id_Equipo FROM Equipos WHERE Nombre_Equipo = ? AND Id_Equipo <> ?", (equipo.nombre_equipo, id_equipo))
-        if cursor.fetchone(): raise HTTPException(status_code=400, detail="¡Atención! Ya existe otro equipo registrado con ese nombre.")
-        cursor.execute("UPDATE Equipos SET Nombre_Equipo = ?, Categoria = ?, Fecha_Fundacion = ?, Url_Logo = ? WHERE Id_Equipo = ?", (equipo.nombre_equipo, equipo.categoria, equipo.fecha_fundacion, equipo.url_logo, id_equipo))
+        cursor.execute("SELECT Id_Equipo, Nombre_Equipo FROM Equipos WHERE Id_Equipo <> ?", (id_equipo,))
+        equipos_existentes = cursor.fetchall()
+        if any(normalizar_nombre_equipo(r.Nombre_Equipo) == nombre_normalizado for r in equipos_existentes):
+            raise HTTPException(status_code=400, detail="¡Atención! Ya existe otro equipo registrado con ese nombre.")
+        pres_val = equipo.presidente.strip() if equipo.presidente and equipo.presidente.strip() else None
+        cursor.execute("UPDATE Equipos SET Nombre_Equipo = ?, Categoria = ?, Fecha_Fundacion = ?, Url_Logo = ?, Presidente = ? WHERE Id_Equipo = ?", (nombre_normalizado, equipo.categoria, equipo.fecha_fundacion, equipo.url_logo, pres_val, id_equipo))
         conn.commit()
         return {"mensaje": "Equipo actualizado correctamente."}
     except HTTPException: raise

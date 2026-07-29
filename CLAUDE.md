@@ -1,57 +1,75 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) and AI assistants when working with code in this repository.
 
 ## Project overview
 
-LigaDeportivaBarrial (LDP Conocoto) is a Spanish-language sports league management app: a FastAPI backend (`main.py`) backed by SQL Server, and a Vue 3 SPA frontend (`frontend-liga-vue/`). It manages equipos (teams), jugadores (players), árbitros (referees), partidos (matches/fixtures), suspensions, standings, and player match attendance/"camerino virtual" — plus image uploads to Firebase Storage.
+LigaDeportivaBarrial (LDP Conocoto) is a Spanish-language sports league management web app for local soccer leagues:
+- **Backend:** FastAPI (`main.py`) backed by Microsoft SQL Server (`LigaConocotoDB`) via `pyodbc` and Firebase Storage (`firebase_service.py`).
+- **Frontend:** Vue 3 SPA (`frontend-liga-vue/`) built with Vite, Tailwind CSS, and Vue Router.
+
+It manages equipos (teams), jugadores (players), árbitros (referees), partidos (matches/fixtures), suspensions, standings, match statistics, vocalías (match sheets), and a player portal ("camerino virtual").
 
 ## Commands
 
 ### Backend (FastAPI, from repo root)
 ```bash
 .\venv\Scripts\activate          # activate the existing venv (Windows)
-uvicorn main:app --reload        # run dev server at http://localhost:8000
+uvicorn main:app --reload        # run dev server at http://127.0.0.1:8000
 ```
-- API docs: `http://localhost:8000/docs` (Swagger UI)
-- Schema migrations are ad hoc: run `python ensure_schema.py` after pulling changes that add columns/tables — it idempotently adds missing tables/columns (see `ensure_schema.py` for the pattern used to extend the schema).
-- No test suite or linter is configured for the backend.
+- API docs: `http://127.0.0.1:8000/docs` (Swagger UI)
+- Schema migrations: run `python ensure_schema.py` idempotently after adding columns/tables to SQL Server.
 
 ### Frontend (Vue 3 + Vite, from `frontend-liga-vue/`)
 ```bash
 npm install
-npm run dev        # dev server, default http://localhost:5173
+npm run dev         # dev server, default http://localhost:5173
 npm run build       # production build to dist/
 npm run preview     # preview the production build
 ```
-- No test suite or linter is configured for the frontend.
 
-## Architecture
+---
 
-### Backend: single-file FastAPI app
-All API routes, Pydantic models, and business-rule validators live in `main.py` — there is no router/module split. Key pieces:
-- **`database.py`** — `get_db_connection()` opens a `pyodbc` connection to a local SQL Server instance using Windows Trusted Auth (server/database names are hardcoded, not env-driven).
-- **`firebase_service.py`** — uploads images to Firebase Storage using `firebase-key.json` (a service-account credential file, gitignored, must exist locally) and returns a public URL. The frontend uploads files to `POST /upload-image` and then submits the returned URL as `url_foto` / `url_logo` fields in the entity create/update calls — Firebase upload and DB writes are separate requests, not atomic.
-- **Every route** opens its own `pyodbc` connection, uses raw parameterized SQL (`cursor.execute(... , (?, ?))`), and closes the connection in a `finally` block. There's no ORM and no connection pooling layer beyond what `pyodbc`/SQL Server does itself.
-- **Auth is minimal and un-hashed**: `/login` compares `password` to `Password_Hash` as plaintext (case-sensitive via `COLLATE SQL_Latin1_General_CP1_CS_AS`), and there's no session/token/JWT — the frontend just stores the returned user object in `localStorage`. Don't assume standard auth middleware exists; route protection (e.g. admin-only vs jugador-only) is enforced client-side by redirecting based on `rol`, not server-side.
-- **Business-rule validators** are plain functions above the routes (`validar_password_segura`, `validar_fecha_nacimiento_max_100`, `validar_arbitros_distintos`, `validar_incidencias_vocalia`, etc.) — follow this pattern (a small validator returning an error string, or `''`/falsy when valid) rather than inlining validation logic into route bodies.
-- **Suspension logic** (`calcular_si_esta_suspendido`) recomputes suspension status on the fly from match history (2 red-card-equivalent suspensions consumed sequentially, 5 accumulated yellows = 1 suspension) rather than storing a persistent "suspended" flag; `Suspensiones_Jugadores` is a separate manual-override table (admin can force-suspend for a year via `POST /jugadores/{id}/suspender`).
-- **Fixture generation** (`POST /generar-calendario`) builds a round-robin schedule per categoría ("Primera", "Máxima") via `generar_round_robin_por_categoria`, and is password-gated by `FIXTURE_PASSWORD` (loaded from `FIXTURE_PASSWORD` env var, falling back to `fixture_password.txt`, falling back to a hardcoded default). `DELETE /partidos/fixture` (wipes the fixture) and `POST /config/fixture-password` share this same password gate. `limpiar_fixture()` cascades deletes across `Calificaciones_Arbitros`, `Asistencia`, `Estadisticas_Jugadores`, `Partidos` in that order (FK dependency order).
-- **Standings/top-scorers** (`/estadisticas/posiciones/{categoria}`, `/goleadores/{categoria}`) are computed in Python by iterating finalized matches, not via SQL aggregation — team stats (pj/pg/pe/pp/gf/gc/gd/pts) are accumulated in a dict keyed by `Id_Equipo`.
+## Architecture & Recent Enhancements
 
-### Frontend: flat Vue 3 SPA
-- **Routing** (`src/router.js`) is a flat list with no route guards or lazy loading: `/` (Inicio), `/login`, `/admin` (AdminDashboard), `/jugador` (JugadorDashboard), `/registro-jugador` (Registro). `App.vue` is just a `<router-view>` shell — no persistent navbar/layout wrapper at the app root (`Navbar.vue` exists as a component used per-view where needed).
-- **No API client / no `axios` / no `.env` usage in practice**: every view calls `fetch('http://127.0.0.1:8000/...')` directly with the backend URL hardcoded inline (despite `VUE_APP_API_URL` being defined in `.env.example` — it is not actually wired up anywhere in `src/`). When adding new API calls, match the existing pattern (hardcoded `http://127.0.0.1:8000` fetch calls) unless you're deliberately introducing a shared API client.
-- **State is local + `localStorage`**, no Vuex/Pinia. Logged-in user (`{id, correo, rol, id_jugador}`) is stored under `localStorage['usuario']` by `Login.vue` and read back by views (e.g. `AdminDashboard.vue`) to gate behavior by `rol` ('Administrador' | 'Jugador').
-- **`AdminDashboard.vue` is a large single-file "god view"** covering equipos, jugadores, árbitros, fixture generation, standings, suspensions, vocalía/match-closing (acta), and traspasos (transfers) all in one component with many local `ref`s — when editing it, locate the relevant section by its `cargarX`/handler function name rather than assuming separation of concerns.
-- Styling uses Tailwind (`tailwind.config.js`, `postcss.config.js`) plus `src/style.css`.
-- `@/` resolves to `frontend-liga-vue/src/` (see `vite.config.js`).
+### 1. Normalización y Sanitización de Nombres de Equipos (Regex)
+- **Backend (`main.py`):** `normalizar_nombre_equipo(nombre: str) -> str` colapsa múltiples espacios intermedios mediante `re.sub(r'\s+', ' ', nombre.strip()).upper()`. Valida que la categoría sea `'Primera'` o `'Máxima'`. En `POST /equipos` y `PUT /equipos/{id_equipo}`, verifica duplicados contra los nombres sanitizados en la base de datos para prevenir variantes como `" Barcelona "` o `"BARCELONA  FC"`.
+- **Frontend (`AdminDashboard.vue`):** Helper `normalizarNombreEquipo(valor)` formatea textos en el formulario. La categoría por defecto es `'Primera'`.
 
-### Data model (inferred from SQL in `main.py`)
-Core tables: `Equipos`, `Jugadores` (FK → `Equipos`), `Arbitros`, `Usuarios` (FK → `Jugadores`, holds `Rol`), `Partidos` (FK → `Equipos` x2 local/visitante, FK → `Arbitros` x3), `Estadisticas_Jugadores` (per-player per-match goals/cards), `Asistencia` (player match attendance), `Suspensiones_Jugadores`, `Calificaciones_Arbitros` (player ratings of referees). `Jugadores.Cedula` and `Arbitros.Cedula` are cross-checked against each other (a person can't be registered as both).
+### 2. Validación Estricta de Cédulas Ecuatorianas
+- **Reglas del Registro Civil:**
+  - Exactamente 10 dígitos numéricos (`^\d{10}$`).
+  - Código de provincia: **`01` a `24`** (provincias) o **`30`** (Ecuatorianos residentes en el exterior).
+  - Tercer dígito: **`0` a `5`** (persona natural).
+  - Verificación del décimo dígito mediante algoritmo Módulo 10.
+- **Implementación:** `validar_cedula_ecuatoriana` en `main.py`, y `validarChecksumCedula` en `AdminDashboard.vue` y `Registro.vue`.
 
-## Environment / secrets
+### 3. Configuración CORS Dinámica
+- `CORSMiddleware` en `main.py` está configurado con `allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?"` y orígenes explícitos (`http://localhost:5173`, `http://127.0.0.1:5173`) permitiendo `allow_credentials=True` sin errores de origen cruzado en navegadores.
 
-- `firebase-key.json` (Firebase Admin SDK service account) must exist at repo root for uploads to work; it's gitignored and not committed.
-- `FIXTURE_PASSWORD` env var overrides the fixture-management password; otherwise it's read from/written to `fixture_password.txt` at repo root (also gitignored-adjacent — check before committing).
-- SQL Server connection details in `database.py` are hardcoded to a local named instance (`DESKTOP-A9DPDLM\SQLNEY`, database `LigaConocotoDB`) using Windows Trusted Auth — there's no `.env`-driven DB config despite `.env.example` existing.
+### 4. Tarjeta de Marcador Deportivo (Estilo `marcador.png` en Paleta Blanco y Azul)
+- Formato inspirado en marcadores deportivos tipo Google Sports / OneFootball:
+  - Header: `⚽ LigaConocoto • Fecha • Categoría` (izquierda) y Estado `Finalizado` / `⏰ Hora` (derecha).
+  - Marcador central: Escudo local (56px) + Nombre -> Marcador numérico destacado (`text-3xl md:text-4xl font-mono font-black text-[#001a4d] bg-blue-50`) -> Escudo visitante + Nombre.
+  - Paleta de colores institucional en blanco (`bg-white`), azul marino (`text-[#001a4d]`), bordes en azul tenue (`border-2 border-blue-100`) y acentos amarillos.
+- Implementado en [AdminDashboard.vue](file:///C:/Users/Det-Pc/Desktop/LigaDeportivaBarrial/frontend-liga-vue/src/views/AdminDashboard.vue) (Cronograma Oficial) e [Inicio.vue](file:///C:/Users/Det-Pc/Desktop/LigaDeportivaBarrial/frontend-liga-vue/src/views/Inicio.vue) (Calendario Oficial).
+
+### 5. Registro de Presidente de Equipo y Vinculación con Traspasos
+- **Base de Datos & Backend (`ensure_schema.py`, `main.py`):** Se añadió la columna `Presidente` (`NVARCHAR(150) NULL`) en la tabla `Equipos`. Los endpoints `GET /equipos`, `POST /equipos` y `PUT /equipos/{id_equipo}` soportan la recepción, guardado y actualización del nombre del presidente o representante legal del club.
+- **Frontend (`AdminDashboard.vue`):**
+  - **Panel de Equipos:** Formulario con campo para "Presidente / Dirigente" y columna en la tabla de Equipos Registrados.
+  - **Módulo de Traspasos:** Muestra a los presidentes autorizantes del equipo de origen y del equipo de destino en tiempo real al seleccionar jugador y nuevo club.
+
+### 6. Documentación
+- [README.md](file:///C:/Users/Det-Pc/Desktop/LigaDeportivaBarrial/README.md) en la raíz contiene el resumen completo de la arquitectura del proyecto, endpoints API y guía de instalación.
+
+---
+
+## Data Model (SQL Server `LigaConocotoDB`)
+Core tables: `Equipos` (contiene `Presidente`), `Jugadores` (FK → `Equipos`), `Arbitros`, `Usuarios` (FK → `Jugadores`, holds `Rol`), `Partidos` (FK → `Equipos` x2 local/visitante, FK → `Arbitros` x3), `Estadisticas_Jugadores`, `Asistencia`, `Suspensiones_Jugadores`, `Calificaciones_Arbitros`. `Jugadores.Cedula` and `Arbitros.Cedula` cross-check against each other.
+
+---
+
+## Secrets & Config
+- `firebase-key.json` required at repo root for Firebase Storage.
+- `database.py` connects to local SQL Server instance `DESKTOP-A9DPDLM\SQLNEY` database `LigaConocotoDB`.

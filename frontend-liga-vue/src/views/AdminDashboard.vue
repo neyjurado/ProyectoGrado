@@ -69,11 +69,12 @@ const msjErrorEquipo = ref('')
 const msjExitoEquipo = ref('')
 const editandoEquipo = ref(false)
 const idEquipoEditando = ref(null)
-const nuevoEquipo = ref({ nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' })
+const nuevoEquipo = ref({ nombre: '', presidente: '', fecha_fundacion: '', categoria: 'Primera', url_logo: '' })
 const logoPreview = ref('')
 const archivoSeleccionado = ref(null)
 
 const formatearTextoMayusculas = (valor) => (valor || '').toUpperCase()
+const normalizarNombreEquipo = (valor) => (valor || '').trim().replace(/\s+/g, ' ').toUpperCase()
 const fechaMaximaFundacion = new Date().toISOString().split('T')[0]
 const fechaMinimaFundacion = new Date(Date.now() - 1000 * 60 * 60 * 24 * 365 * 50).toISOString().split('T')[0]
 
@@ -178,6 +179,21 @@ const equiposDestinoParaTraspaso = computed(() => {
     return equipos.value.filter(eq => eq.nombre.toLowerCase().includes(txt));
 })
 
+const jugadorSeleccionadoTraspasoObj = computed(() => {
+    if (!formTraspaso.value.id_jugador) return null;
+    return jugadoresRegistrados.value.find(j => j.id_jugador === parseInt(formTraspaso.value.id_jugador)) || null;
+});
+
+const equipoOrigenTraspaso = computed(() => {
+    if (!jugadorSeleccionadoTraspasoObj.value) return null;
+    return equipos.value.find(e => e.id === jugadorSeleccionadoTraspasoObj.value.id_equipo) || null;
+});
+
+const equipoDestinoTraspaso = computed(() => {
+    if (!formTraspaso.value.id_nuevo_equipo) return null;
+    return equipos.value.find(e => e.id === parseInt(formTraspaso.value.id_nuevo_equipo)) || null;
+});
+
 const partidosPendientes = computed(() => partidos.value.filter(p => p.estado === 'Pendiente'))
 const hayPartidosPendientes = computed(() => partidosPendientes.value.length > 0)
 const contarJugadores = (id) => jugadoresRegistrados.value.filter(j => j.id_equipo === id).length
@@ -198,7 +214,7 @@ const validarChecksumCedula = (cedula) => {
     const provincia = parseInt(cedula.slice(0, 2), 10)
     const tercerDigito = parseInt(cedula[2], 10)
     if (!((provincia >= 1 && provincia <= 24) || provincia === 30)) return false
-    if (tercerDigito > 6) return false
+    if (tercerDigito > 5) return false
     const coeficientes = [2, 1, 2, 1, 2, 1, 2, 1, 2]
     let suma = 0
     for (let i = 0; i < 9; i++) {
@@ -266,7 +282,7 @@ const registrarJugador = async () => {
 // ACCIONES EQUIPOS
 const seleccionarEscudo = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoSeleccionado.value = archivo; logoPreview.value = URL.createObjectURL(archivo); }
 const removerEscudo = () => { logoPreview.value = ''; archivoSeleccionado.value = null; }
-const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = formatearTextoMayusculas(equipo.nombre); nuevoEquipo.value.categoria = equipo.categoria; nuevoEquipo.value.fecha_fundacion = equipo.fecha_fundacion || ''; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = formatearTextoMayusculas(equipo.nombre); nuevoEquipo.value.presidente = equipo.presidente || ''; nuevoEquipo.value.categoria = equipo.categoria; nuevoEquipo.value.fecha_fundacion = equipo.fecha_fundacion || ''; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
 const eliminarEquipo = async (id, n) => { 
     if (contarJugadores(id) > 0) { alert("⚠️ No se puede eliminar: El equipo contiene jugadores registrados."); return; } 
     if (!confirm(`¿Dar de baja al equipo ${n}?`)) return; 
@@ -278,8 +294,62 @@ const eliminarEquipo = async (id, n) => {
 }
 const verPlantilla = (equipo) => { equipoSeleccionadoPlantilla.value = equipo.nombre; jugadoresFiltradosPlantilla.value = jugadoresRegistrados.value.filter(j => j.id_equipo === equipo.id); mostrarModalPlantilla.value = true; }
 
-const registrarEquipo = async () => { cargandoEquipo.value = true; msjErrorEquipo.value = ''; msjExitoEquipo.value = ''; let logo = logoPreview.value; try { const nombreEquipo = formatearTextoMayusculas(nuevoEquipo.value.nombre); nuevoEquipo.value.nombre = nombreEquipo; if (archivoSeleccionado.value) logo = await uploadToFirebase(archivoSeleccionado.value, 'equipos'); const res = await fetch(editandoEquipo.value ? `http://127.0.0.1:8000/equipos/${idEquipoEditando.value}` : 'http://127.0.0.1:8000/equipos', { method: editandoEquipo.value ? 'PUT' : 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre_equipo: nombreEquipo, categoria: nuevoEquipo.value.categoria, fecha_fundacion: nuevoEquipo.value.fecha_fundacion || null, url_logo: logo }) }); if (res.ok) { nuevoEquipo.value = { nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' }; editandoEquipo.value = false; removerEscudo(); await cargarEquipos(); await cargarEstadisticas(); msjExitoEquipo.value="Éxito"; setTimeout(()=>msjExitoEquipo.value='', 3000); } else { const d = await res.json(); msjErrorEquipo.value = d.detail; } } catch (e) {} finally { cargandoEquipo.value = false; } }
-const cancelarEdicionEquipo = () => { editandoEquipo.value = false; nuevoEquipo.value = { nombre: '', fecha_fundacion: '', categoria: '', url_logo: '' }; removerEscudo(); }
+const registrarEquipo = async () => {
+    cargandoEquipo.value = true;
+    msjErrorEquipo.value = '';
+    msjExitoEquipo.value = '';
+    let logo = logoPreview.value;
+    try {
+        const nombreEquipo = normalizarNombreEquipo(nuevoEquipo.value.nombre);
+        if (!nombreEquipo || nombreEquipo.length < 2) {
+            msjErrorEquipo.value = 'El nombre del equipo debe tener al menos 2 caracteres válidos.';
+            cargandoEquipo.value = false;
+            return;
+        }
+        if (!nuevoEquipo.value.categoria) {
+            msjErrorEquipo.value = 'Por favor selecciona la categoría del equipo (Primera o Máxima).';
+            cargandoEquipo.value = false;
+            return;
+        }
+        nuevoEquipo.value.nombre = nombreEquipo;
+        if (archivoSeleccionado.value) {
+            logo = await uploadToFirebase(archivoSeleccionado.value, 'equipos');
+        }
+        const res = await fetch(editandoEquipo.value ? `http://127.0.0.1:8000/equipos/${idEquipoEditando.value}` : 'http://127.0.0.1:8000/equipos', {
+            method: editandoEquipo.value ? 'PUT' : 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                nombre_equipo: nombreEquipo,
+                presidente: nuevoEquipo.value.presidente ? nuevoEquipo.value.presidente.trim() : null,
+                categoria: nuevoEquipo.value.categoria,
+                fecha_fundacion: nuevoEquipo.value.fecha_fundacion || null,
+                url_logo: logo || null
+            })
+        });
+        if (res.ok) {
+            nuevoEquipo.value = { nombre: '', presidente: '', fecha_fundacion: '', categoria: 'Primera', url_logo: '' };
+            editandoEquipo.value = false;
+            removerEscudo();
+            await cargarEquipos();
+            await cargarEstadisticas();
+            msjExitoEquipo.value = "Equipo guardado exitosamente.";
+            setTimeout(() => { msjExitoEquipo.value = '' }, 3500);
+        } else {
+            const d = await res.json();
+            msjErrorEquipo.value = d.detail || "No se pudo registrar el equipo.";
+        }
+    } catch (e) {
+        console.error("Error al registrar equipo:", e);
+        msjErrorEquipo.value = e?.message || "Error de red al intentar contactar con el servidor backend.";
+    } finally {
+        cargandoEquipo.value = false;
+    }
+}
+const cancelarEdicionEquipo = () => {
+    editandoEquipo.value = false;
+    nuevoEquipo.value = { nombre: '', presidente: '', fecha_fundacion: '', categoria: 'Primera', url_logo: '' };
+    removerEscudo();
+}
 
 // ACCIONES ÁRBITROS
 const seleccionarArbitroFoto = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoArbitroSeleccionado.value = archivo; arbitroFotoPreview.value = URL.createObjectURL(archivo); }
@@ -620,6 +690,7 @@ const alterarCategoriaClub = async (id, catActual) => {
                     <div v-if="msjExitoEquipo" class="bg-green-50 text-green-700 p-3 rounded-lg text-sm mb-4 border">✅ {{ msjExitoEquipo }}</div>
                     <form @submit.prevent="registrarEquipo" class="space-y-5">
                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Nombre</label><input v-model="nuevoEquipo.nombre" @input="nuevoEquipo.nombre = formatearTextoMayusculas($event.target.value)" type="text" required class="w-full p-3 border rounded-lg outline-none uppercase" /></div>
+                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Presidente / Dirigente</label><input v-model="nuevoEquipo.presidente" type="text" placeholder="Ej. Lcdo. Carlos Andrade" class="w-full p-3 border rounded-lg outline-none" /></div>
                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Categoría</label><select v-model="nuevoEquipo.categoria" required class="w-full p-3 border rounded-lg bg-white outline-none"><option value="Máxima">Máxima</option><option value="Primera">Primera</option></select></div>
                         <div><label class="block text-sm font-bold text-gray-700 mb-1">Fecha Fundación</label><input v-model="nuevoEquipo.fecha_fundacion" type="date" :max="fechaMaximaFundacion" :min="fechaMinimaFundacion" class="w-full p-3 border rounded-lg outline-none" /></div>
                         <div>
@@ -632,18 +703,19 @@ const alterarCategoriaClub = async (id, catActual) => {
                                 </div>
                             </div>
                         </div>
-                        <div class="flex space-x-3"><button v-if="editandoEquipo" @click="cancelarEdicionEquipo" type="button" class="w-1/3 bg-gray-500 text-white font-bold py-3 rounded-xl transition">Cancelar</button><button type="submit" class="w-full bg-yellow-400 text-blue-900 font-bold py-3 rounded-xl shadow transition">{{ editandoEquipo ? 'Actualizar' : 'Guardar' }}</button></div>
+                        <div class="flex space-x-3"><button v-if="editandoEquipo" @click="cancelarEdicionEquipo" type="button" class="w-1/3 bg-gray-500 text-white font-bold py-3 rounded-xl transition">Cancelar</button><button type="submit" :disabled="cargandoEquipo" class="w-full bg-yellow-400 text-blue-900 font-bold py-3 rounded-xl shadow transition disabled:opacity-50 flex justify-center items-center"><span v-if="cargandoEquipo" class="inline-block animate-spin rounded-full h-5 w-5 border-2 border-blue-900 border-t-transparent mr-2"></span>{{ editandoEquipo ? 'Actualizar' : 'Guardar' }}</button></div>
                     </form>
                 </div>
                 <div class="bg-white p-8 rounded-2xl border shadow-lg">
                     <h2 class="text-2xl font-black text-gray-800 mb-6">📋 Equipos Registrados</h2>
                     <div class="overflow-x-auto">
                         <table class="w-full text-left border-collapse">
-                            <thead><tr class="bg-gray-100 text-sm"><th>Escudo</th><th>Nombre</th><th>Categoría</th><th class="text-center">Plantilla</th><th class="text-center">Acciones</th></tr></thead>
+                            <thead><tr class="bg-gray-100 text-sm"><th>Escudo</th><th>Nombre</th><th>Presidente</th><th>Categoría</th><th class="text-center">Plantilla</th><th class="text-center">Acciones</th></tr></thead>
                             <tbody>
                                 <tr v-for="eq in equipos" :key="eq.id" class="border-b hover:bg-gray-50 transition">
                                     <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-10 w-10 object-contain rounded-full border bg-white" /><div v-else class="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-xl">🛡️</div></td>
                                     <td class="p-3 font-bold text-[#001a4d]">{{ formatearTextoMayusculas(eq.nombre) }}</td>
+                                    <td class="p-3 font-medium text-gray-700"><span v-if="eq.presidente" class="flex items-center gap-1">👤 {{ eq.presidente }}</span><span v-else class="text-gray-400 italic text-xs">Sin registrar</span></td>
                                     <td class="p-3"><span class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">{{ eq.categoria }}</span></td>
                                     <td class="p-3 text-center font-bold text-gray-600">{{ contarJugadores(eq.id) }} / 25</td>
                                     <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararEdicionEquipo(eq)" class="bg-gray-100 hover:bg-gray-200 p-2 rounded">✏️</button><button @click="verPlantilla(eq)" class="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded">👥</button><button @click="eliminarEquipo(eq.id, eq.nombre)" class="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded">🗑️</button></div></td>
@@ -719,29 +791,58 @@ const alterarCategoriaClub = async (id, catActual) => {
                 <div class="lg:col-span-2 bg-white p-8 rounded-2xl shadow-xl border border-gray-200">
                     <h2 class="text-2xl font-black text-gray-800 mb-6 flex items-center justify-between"><div><span class="mr-2 text-blue-600">📋</span> CRONOGRAMA OFICIAL</div><div class="text-sm font-bold bg-blue-50 text-blue-700 px-4 py-1.5 rounded-full border border-blue-200">Total: {{ partidos.length }}</div></h2>
                     <div class="overflow-y-auto max-h-[72vh] space-y-4 pr-3">
-                        <div v-for="partido in partidos" :key="partido.id_partido" class="border-2 border-gray-200/80 rounded-2xl p-5 bg-gray-50 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm hover:shadow-md hover:bg-white hover:border-blue-900/30 transition-all duration-200">
-                            <div class="flex flex-col border-b md:border-b-0 md:border-r pr-5 min-w-[140px]">
-                                <span class="text-sm font-black text-[#001a4d]">📅 {{ partido.fecha }}</span>
-                                <span class="text-base font-mono font-black text-blue-600 mt-1">⏰ {{ partido.hora }}</span>
+                        <div v-for="partido in partidos" :key="partido.id_partido" class="bg-white border-2 border-blue-100 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-blue-900/40 transition duration-200 flex flex-col justify-between">
+                            <!-- Header: Liga info + Estado -->
+                            <div class="flex items-center justify-between text-xs pb-3 border-b border-blue-100 mb-3">
+                                <div class="flex items-center space-x-1.5 truncate">
+                                    <span class="text-blue-900 font-black tracking-wide">⚽ LigaConocoto</span>
+                                    <span class="text-blue-300">•</span>
+                                    <span class="text-gray-700 font-bold">📅 {{ partido.fecha }}</span>
+                                    <span class="text-blue-300">•</span>
+                                    <span class="text-blue-700 font-bold truncate">{{ partido.categoria_local || partido.categoria_visitante || 'Serie' }}</span>
+                                </div>
+                                <div>
+                                    <span v-if="partido.estado === 'Finalizado'" class="text-xs font-black text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300 shadow-sm">Finalizado</span>
+                                    <span v-else class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1 rounded-full border border-amber-300 shadow-sm">⏰ {{ partido.hora || 'Pendiente' }}</span>
+                                </div>
                             </div>
-                            <div class="flex items-center justify-center flex-1 space-x-4 min-w-[320px]">
-                                <div class="flex items-center space-x-3 justify-end w-[44%] text-right">
-                                    <span class="font-black text-sm md:text-base text-[#001a4d] truncate">{{ partido.local }}</span>
-                                    <img v-if="obtenerLogoEquipo(partido.local)" :src="obtenerLogoEquipo(partido.local)" class="h-10 w-10 object-contain rounded-full border-2 border-gray-200 bg-white p-0.5 shadow-sm" />
+
+                            <!-- Center: Escudos, Nombres y Marcador grande -->
+                            <div class="grid grid-cols-7 items-center my-3">
+                                <!-- Equipo Local -->
+                                <div class="col-span-3 flex flex-col items-center text-center">
+                                    <img v-if="obtenerLogoEquipo(partido.local)" :src="obtenerLogoEquipo(partido.local)" class="h-14 w-14 object-contain mb-2 rounded-full border-2 border-blue-100 bg-white p-1 shadow-sm" />
+                                    <div v-else class="h-14 w-14 rounded-full bg-blue-50 border-2 border-blue-200 flex items-center justify-center text-2xl mb-2">🛡️</div>
+                                    <p class="text-sm md:text-base font-black text-[#001a4d] leading-tight max-w-[160px] truncate">{{ partido.local }}</p>
                                 </div>
-                                <span class="text-xs bg-[#001a4d] text-yellow-400 font-black px-3 py-1 rounded-xl shadow-inner tracking-wider">VS</span>
-                                <div class="flex items-center space-x-3 justify-start w-[44%] text-left">
-                                    <img v-if="obtenerLogoEquipo(partido.visitante)" :src="obtenerLogoEquipo(partido.visitante)" class="h-10 w-10 object-contain rounded-full border-2 border-gray-200 bg-white p-0.5 shadow-sm" />
-                                    <span class="font-black text-sm md:text-base text-[#001a4d] truncate">{{ partido.visitante }}</span>
+
+                                <!-- Marcador Central -->
+                                <div class="col-span-1 flex flex-col items-center justify-center">
+                                    <div v-if="partido.estado === 'Finalizado'" class="flex items-center justify-center space-x-2 text-3xl md:text-4xl font-black font-mono tracking-tighter text-[#001a4d] bg-blue-50 px-3 py-1 rounded-2xl border border-blue-200 shadow-inner">
+                                        <span>{{ partido.goles_local }}</span>
+                                        <span class="text-blue-400 font-normal text-2xl">-</span>
+                                        <span>{{ partido.goles_visitante }}</span>
+                                    </div>
+                                    <div v-else class="flex flex-col items-center">
+                                        <span class="text-xs font-black bg-[#001a4d] text-yellow-400 px-3 py-1 rounded-xl shadow-sm tracking-wider">VS</span>
+                                    </div>
+                                </div>
+
+                                <!-- Equipo Visitante -->
+                                <div class="col-span-3 flex flex-col items-center text-center">
+                                    <img v-if="obtenerLogoEquipo(partido.visitante)" :src="obtenerLogoEquipo(partido.visitante)" class="h-14 w-14 object-contain mb-2 rounded-full border-2 border-blue-100 bg-white p-1 shadow-sm" />
+                                    <div v-else class="h-14 w-14 rounded-full bg-blue-50 border-2 border-blue-200 flex items-center justify-center text-2xl mb-2">🛡️</div>
+                                    <p class="text-sm md:text-base font-black text-[#001a4d] leading-tight max-w-[160px] truncate">{{ partido.visitante }}</p>
                                 </div>
                             </div>
-                            <div class="flex items-center space-x-4 justify-between md:justify-end min-w-[190px]">
-                                <div class="flex flex-col items-end">
-                                    <span :class="partido.estado === 'Finalizado' ? 'bg-green-100 text-green-800 border-green-300' : 'bg-yellow-100 text-yellow-800 border-yellow-300'" class="text-xs font-black px-3 py-1 rounded-full border-2 uppercase tracking-widest shadow-sm">{{ partido.estado }}</span>
-                                    <span class="text-xs font-semibold text-gray-500 mt-2 truncate max-w-[140px] italic">🏁 {{ partido.arbitro }}</span>
+
+                            <!-- Footer: Arbitro y Acciones -->
+                            <div class="pt-3 mt-2 border-t border-blue-100 flex items-center justify-between text-xs text-gray-600 bg-blue-50/50 -mx-5 -mb-5 px-5 py-3 rounded-b-2xl">
+                                <span class="truncate italic text-[11px] font-semibold text-blue-900">🏁 {{ partido.arbitro }}</span>
+                                <div class="flex items-center space-x-2">
+                                    <button v-if="partido.estado === 'Pendiente'" @click="abrirModalEditarPartido(partido)" class="bg-white hover:bg-[#001a4d] hover:text-white text-gray-700 px-3 py-1.5 rounded-lg text-xs font-black transition border border-gray-300 shadow-sm">✏️ Editar</button>
+                                    <button v-else @click="verActaFinalizada(partido)" class="bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg text-xs font-black transition shadow-sm flex items-center gap-1">🔍 Ver Acta</button>
                                 </div>
-                                <button v-if="partido.estado === 'Pendiente'" @click="abrirModalEditarPartido(partido)" class="bg-gray-200 hover:bg-[#001a4d] hover:text-white text-gray-700 p-3 rounded-xl transition font-bold shadow-sm">✏️</button>
-                                <button v-else @click="verActaFinalizada(partido)" class="bg-green-600 hover:bg-green-700 text-white p-3 rounded-xl transition text-sm font-bold shadow-sm flex items-center">🔍 Acta</button>
                             </div>
                         </div>
                     </div>
@@ -858,13 +959,27 @@ const alterarCategoriaClub = async (id, catActual) => {
                                 <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo equipo destino</label>
                                 <select v-model="formTraspaso.id_nuevo_equipo" required class="w-full p-3 border border-blue-200 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
                                 <option value="" disabled>-- Seleccione Destino --</option>
-                                <option v-for="eq in equiposDestinoParaTraspaso" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }})</option>
+                                <option v-for="eq in equiposDestinoParaTraspaso" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }}) {{ eq.presidente ? ' • Pres: ' + eq.presidente : '' }}</option>
                                 </select>
                             </div>
                         </div>
                         <div>
                             <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo número de dorsal</label>
                             <input v-model="formTraspaso.nuevo_numero_camiseta" type="number" required min="1" max="99" class="w-full p-3 border rounded-xl text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Ej. 10" />
+                        </div>
+                        <!-- Cuadro Informativo de Presidentes y Autorización -->
+                        <div v-if="equipoOrigenTraspaso || equipoDestinoTraspaso" class="bg-indigo-50 border border-indigo-200 p-3.5 rounded-2xl space-y-2 text-xs">
+                            <div class="font-black text-[#001a4d] uppercase tracking-wider flex items-center gap-1.5">
+                                👔 Dirigencia y Presidentes Autorizantes
+                            </div>
+                            <div v-if="equipoOrigenTraspaso" class="flex justify-between items-center text-gray-700">
+                                <span class="font-bold text-gray-600">Club Origen ({{ equipoOrigenTraspaso.nombre }}):</span>
+                                <span class="font-extrabold text-[#001a4d] bg-white px-2.5 py-1 rounded-lg border shadow-sm">{{ equipoOrigenTraspaso.presidente || '⚠️ Sin Pdte. registrado' }}</span>
+                            </div>
+                            <div v-if="equipoDestinoTraspaso" class="flex justify-between items-center text-gray-700">
+                                <span class="font-bold text-gray-600">Club Destino ({{ equipoDestinoTraspaso.nombre }}):</span>
+                                <span class="font-extrabold text-blue-900 bg-white px-2.5 py-1 rounded-lg border shadow-sm">{{ equipoDestinoTraspaso.presidente || '⚠️ Sin Pdte. registrado' }}</span>
+                            </div>
                         </div>
                         <button type="submit" :disabled="hayPartidosPendientes" class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-black py-3 rounded-xl text-xs shadow transition disabled:cursor-not-allowed disabled:bg-gray-400">FIRMAR TRASPASO EN LA LIGA</button>
                     </form>

@@ -223,31 +223,56 @@ const irALogin = () => router.push('/login')
                             </button>
                         </div>
                         
-                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[440px] overflow-y-auto">
-                            <article v-for="partido in partidosCalendario" :key="partido.id_partido" class="bg-gray-50 border border-gray-200 rounded-2xl p-4 hover:shadow-md hover:border-[#001a4d] hover:bg-white transition flex flex-col justify-between">
-                                <div class="text-center mb-3 border-b border-gray-200 pb-2 flex items-center justify-between gap-2">
-                                    <p class="text-xs text-gray-500 font-black uppercase tracking-wider">📅 {{ partido.fecha }} • ⏰ {{ partido.hora }}</p>
-                                    <span :class="partido.estado === 'Finalizado' ? 'bg-green-100 text-green-700 border-green-200' : 'bg-yellow-100 text-yellow-800 border-yellow-200'" class="px-2 py-1 rounded-full border text-[10px] font-black uppercase tracking-widest">{{ partido.estado }}</span>
-                                </div>
-                                <div class="flex justify-between items-center">
-                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
-                                        <img v-if="obtenerLogo(partido.local)" :src="obtenerLogo(partido.local)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
-                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
-                                        <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.local }}</p>
+                        <div class="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[520px] overflow-y-auto">
+                            <article v-for="partido in partidosCalendario" :key="partido.id_partido" class="bg-white border-2 border-blue-100 rounded-2xl p-5 shadow-sm hover:shadow-md hover:border-blue-900/40 transition duration-200 flex flex-col justify-between">
+                                <!-- Header: Liga / Categoria / Fecha + Estado -->
+                                <div class="flex items-center justify-between text-xs pb-3 border-b border-blue-100 mb-3">
+                                    <div class="flex items-center space-x-1.5 truncate">
+                                        <span class="text-blue-900 font-black tracking-wide">⚽ LigaConocoto</span>
+                                        <span class="text-blue-300">•</span>
+                                        <span class="text-gray-700 font-bold">📅 {{ partido.fecha }}</span>
+                                        <span class="text-blue-300">•</span>
+                                        <span class="text-blue-700 font-bold truncate">{{ partido.categoria_local || partido.categoria_visitante || 'Serie' }}</span>
                                     </div>
-                                    <div class="w-[20%] text-center">
-                                        <span class="text-[10px] font-black bg-[#001a4d] text-yellow-400 px-2 py-1 rounded shadow-inner">VS</span>
-                                    </div>
-                                    <div class="flex flex-col items-center justify-center w-[40%] text-center">
-                                        <img v-if="obtenerLogo(partido.visitante)" :src="obtenerLogo(partido.visitante)" class="h-10 w-10 object-contain mb-1 drop-shadow-sm rounded-full bg-white border border-gray-100" />
-                                        <div v-else class="h-10 w-10 bg-gray-200 rounded-full flex items-center justify-center text-[10px] mb-1">🛡️</div>
-                                        <p class="text-sm font-bold text-[#001a4d] leading-tight">{{ partido.visitante }}</p>
+                                    <div>
+                                        <span v-if="partido.estado === 'Finalizado'" class="text-xs font-black text-emerald-800 bg-emerald-100 px-3 py-1 rounded-full border border-emerald-300 shadow-sm">Finalizado</span>
+                                        <span v-else class="text-xs font-black text-amber-800 bg-amber-100 px-3 py-1 rounded-full border border-amber-300 shadow-sm">⏰ {{ partido.hora || 'Pendiente' }}</span>
                                     </div>
                                 </div>
-                                <div class="mt-4 flex items-center justify-between gap-3">
-                                    <span class="text-[10px] font-black uppercase tracking-wider text-gray-500">{{ partido.categoria_local || partido.categoria_visitante || 'Sin categoría' }}</span>
-                                    <span v-if="partido.estado === 'Finalizado'" class="bg-green-600 text-white font-black px-3 py-1 rounded-xl text-xs shadow-sm">{{ partido.goles_local }} - {{ partido.goles_visitante }}</span>
-                                    <span v-else class="bg-[#001a4d] text-yellow-400 font-black px-3 py-1 rounded-xl text-xs shadow-sm">Pendiente</span>
+
+                                <!-- Center: Escudos, Nombres y Marcador grande -->
+                                <div class="grid grid-cols-7 items-center my-3">
+                                    <!-- Equipo Local -->
+                                    <div class="col-span-3 flex flex-col items-center text-center">
+                                        <img v-if="obtenerLogo(partido.local)" :src="obtenerLogo(partido.local)" class="h-14 w-14 object-contain mb-2 rounded-full border-2 border-blue-100 bg-white p-1 shadow-sm" />
+                                        <div v-else class="h-14 w-14 rounded-full bg-blue-50 border-2 border-blue-200 flex items-center justify-center text-2xl mb-2">🛡️</div>
+                                        <p class="text-sm md:text-base font-black text-[#001a4d] leading-tight max-w-[140px] truncate">{{ partido.local }}</p>
+                                    </div>
+
+                                    <!-- Marcador Central -->
+                                    <div class="col-span-1 flex flex-col items-center justify-center">
+                                        <div v-if="partido.estado === 'Finalizado'" class="flex items-center justify-center space-x-2 text-3xl md:text-4xl font-black font-mono tracking-tighter text-[#001a4d] bg-blue-50 px-3 py-1 rounded-2xl border border-blue-200 shadow-inner">
+                                            <span>{{ partido.goles_local }}</span>
+                                            <span class="text-blue-400 font-normal text-2xl">-</span>
+                                            <span>{{ partido.goles_visitante }}</span>
+                                        </div>
+                                        <div v-else class="flex flex-col items-center">
+                                            <span class="text-xs font-black bg-[#001a4d] text-yellow-400 px-3 py-1 rounded-xl shadow-sm tracking-wider">VS</span>
+                                        </div>
+                                    </div>
+
+                                    <!-- Equipo Visitante -->
+                                    <div class="col-span-3 flex flex-col items-center text-center">
+                                        <img v-if="obtenerLogo(partido.visitante)" :src="obtenerLogo(partido.visitante)" class="h-14 w-14 object-contain mb-2 rounded-full border-2 border-blue-100 bg-white p-1 shadow-sm" />
+                                        <div v-else class="h-14 w-14 rounded-full bg-blue-50 border-2 border-blue-200 flex items-center justify-center text-2xl mb-2">🛡️</div>
+                                        <p class="text-sm md:text-base font-black text-[#001a4d] leading-tight max-w-[140px] truncate">{{ partido.visitante }}</p>
+                                    </div>
+                                </div>
+
+                                <!-- Footer: Info extra -->
+                                <div class="pt-3 mt-2 border-t border-blue-100 flex items-center justify-between text-xs text-gray-600 bg-blue-50/50 -mx-5 -mb-5 px-5 py-3 rounded-b-2xl">
+                                    <span class="truncate italic text-[11px] font-semibold text-blue-900">Liga Deportiva Parroquial Conocoto</span>
+                                    <span class="text-[10px] font-black bg-blue-100 text-blue-900 px-2.5 py-0.5 rounded-md border border-blue-200 uppercase">{{ partido.categoria_local || 'Campeonato' }}</span>
                                 </div>
                             </article>
                             <div v-if="partidosCalendario.length === 0" class="col-span-full py-8 text-center text-gray-400 italic font-medium">No hay partidos para mostrar con este filtro.</div>

@@ -21,6 +21,7 @@ for table, column, definition in [
     ('Partidos', 'Id_Arbitro_2', 'INT NULL'),
     ('Partidos', 'Id_Arbitro_3', 'INT NULL'),
     ('Partidos', 'Url_Foto_Vocalia', 'NVARCHAR(500) NULL'),
+    ('Equipos', 'Presidente', 'NVARCHAR(150) NULL'),
 ]:
     cur.execute(f"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = '{table}' AND COLUMN_NAME = '{column}'")
     if cur.fetchone()[0] == 0:
