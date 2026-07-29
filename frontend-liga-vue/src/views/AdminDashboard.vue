@@ -123,8 +123,9 @@ const categoriaEstadisticas = ref('Máxima')
 const tablaPosiciones = ref([])
 const maxGoleadores = ref([])
 
-const filtroTraspasoBusqueda = ref('') 
-const filtroTraspasoDestino = ref('') // NUEVO: Filtro para equipo destino
+const filtroTraspasoCategoriaOrigen = ref('')
+const filtroTraspasoEquipoOrigen = ref('')
+const filtroTraspasoCategoriaDestino = ref('')
 const formTraspaso = ref({ id_jugador: '', id_nuevo_equipo: '', nuevo_numero_camiseta: '' })
 const msjTraspasoError = ref('')
 const msjTraspasoExito = ref('')
@@ -162,22 +163,30 @@ const jugadoresFiltrados = computed(() => {
     });
 })
 
-const jugadoresParaTraspaso = computed(() => {
-    const txt = filtroTraspasoBusqueda.value.toLowerCase();
-    if(!txt) return jugadoresRegistrados.value;
-    return jugadoresRegistrados.value.filter(j => 
-        j.nombre.toLowerCase().includes(txt) || 
-        j.apellido.toLowerCase().includes(txt) || 
-        j.cedula.includes(txt)
-    );
-})
+const equiposOrigenFiltrados = computed(() => {
+    if (!filtroTraspasoCategoriaOrigen.value) return equipos.value;
+    return equipos.value.filter(eq => eq.categoria === filtroTraspasoCategoriaOrigen.value);
+});
 
-// NUEVO: Filtro para equipo destino
+const jugadoresParaTraspaso = computed(() => {
+    return jugadoresRegistrados.value.filter(j => {
+        const matchCat = !filtroTraspasoCategoriaOrigen.value || j.categoria_equipo === filtroTraspasoCategoriaOrigen.value;
+        const matchEq = !filtroTraspasoEquipoOrigen.value || j.id_equipo === parseInt(filtroTraspasoEquipoOrigen.value);
+        return matchCat && matchEq;
+    });
+});
+
 const equiposDestinoParaTraspaso = computed(() => {
-    const txt = filtroTraspasoDestino.value.toLowerCase();
-    if(!txt) return equipos.value;
-    return equipos.value.filter(eq => eq.nombre.toLowerCase().includes(txt));
-})
+    const idEquipoActualPlayer = jugadorSeleccionadoTraspasoObj.value ? jugadorSeleccionadoTraspasoObj.value.id_equipo : null;
+    return equipos.value.filter(eq => {
+        const matchCat = !filtroTraspasoCategoriaDestino.value || eq.categoria === filtroTraspasoCategoriaDestino.value;
+        const noEsMismoEquipo = !idEquipoActualPlayer || eq.id !== idEquipoActualPlayer;
+        return matchCat && noEsMismoEquipo;
+    });
+});
+
+const equiposMaxima = computed(() => equipos.value.filter(eq => eq.categoria === 'Máxima'));
+const equiposPrimera = computed(() => equipos.value.filter(eq => eq.categoria === 'Primera'));
 
 const jugadorSeleccionadoTraspasoObj = computed(() => {
     if (!formTraspaso.value.id_jugador) return null;
@@ -192,6 +201,21 @@ const equipoOrigenTraspaso = computed(() => {
 const equipoDestinoTraspaso = computed(() => {
     if (!formTraspaso.value.id_nuevo_equipo) return null;
     return equipos.value.find(e => e.id === parseInt(formTraspaso.value.id_nuevo_equipo)) || null;
+});
+
+const dorsalesOcupadosEquipoDestino = computed(() => {
+    if (!formTraspaso.value.id_nuevo_equipo) return [];
+    const idEq = parseInt(formTraspaso.value.id_nuevo_equipo);
+    return jugadoresRegistrados.value
+        .filter(j => j.id_equipo === idEq && j.numero_camiseta)
+        .map(j => parseInt(j.numero_camiseta))
+        .sort((a, b) => a - b);
+});
+
+const dorsalTraspasoExisteEnDestino = computed(() => {
+    if (!formTraspaso.value.nuevo_numero_camiseta || !formTraspaso.value.id_nuevo_equipo) return false;
+    const num = parseInt(formTraspaso.value.nuevo_numero_camiseta);
+    return dorsalesOcupadosEquipoDestino.value.includes(num);
 });
 
 const partidosPendientes = computed(() => partidos.value.filter(p => p.estado === 'Pendiente'))
@@ -532,6 +556,10 @@ const enviarActaVocalia = async () => {
 // MÉTODOS GESTIÓN DE TORNEO
 const ejecutarTraspasoOficial = async () => {
     msjTraspasoError.value = ''; msjTraspasoExito.value = '';
+    if (dorsalTraspasoExisteEnDestino.value) {
+        msjTraspasoError.value = `¡Conflicto de dorsal! El número #${formTraspaso.value.nuevo_numero_camiseta} ya está ocupado en el club de destino.`;
+        return;
+    }
     try {
         const res = await fetch(`http://127.0.0.1:8000/jugadores/${formTraspaso.value.id_jugador}/traspaso`, {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
@@ -539,7 +567,7 @@ const ejecutarTraspasoOficial = async () => {
         });
         const d = await res.json()
         if (res.ok) {
-            msjTraspasoExito.value = d.mensaje; formTraspaso.value = { id_jugador: '', id_nuevo_equipo: '', nuevo_numero_camiseta: '' }; filtroTraspasoBusqueda.value = ''; filtroTraspasoDestino.value = '';
+            msjTraspasoExito.value = d.mensaje; formTraspaso.value = { id_jugador: '', id_nuevo_equipo: '', nuevo_numero_camiseta: '' }; filtroTraspasoCategoriaOrigen.value = ''; filtroTraspasoEquipoOrigen.value = ''; filtroTraspasoCategoriaDestino.value = '';
             await cargarJugadores();
         } else { msjTraspasoError.value = d.detail; }
     } catch (e) { msjTraspasoError.value = "Error de red."; }
@@ -706,22 +734,71 @@ const alterarCategoriaClub = async (id, catActual) => {
                         <div class="flex space-x-3"><button v-if="editandoEquipo" @click="cancelarEdicionEquipo" type="button" class="w-1/3 bg-gray-500 text-white font-bold py-3 rounded-xl transition">Cancelar</button><button type="submit" :disabled="cargandoEquipo" class="w-full bg-yellow-400 text-blue-900 font-bold py-3 rounded-xl shadow transition disabled:opacity-50 flex justify-center items-center"><span v-if="cargandoEquipo" class="inline-block animate-spin rounded-full h-5 w-5 border-2 border-blue-900 border-t-transparent mr-2"></span>{{ editandoEquipo ? 'Actualizar' : 'Guardar' }}</button></div>
                     </form>
                 </div>
-                <div class="bg-white p-8 rounded-2xl border shadow-lg">
-                    <h2 class="text-2xl font-black text-gray-800 mb-6">📋 Equipos Registrados</h2>
-                    <div class="overflow-x-auto">
-                        <table class="w-full text-left border-collapse">
-                            <thead><tr class="bg-gray-100 text-sm"><th>Escudo</th><th>Nombre</th><th>Presidente</th><th>Categoría</th><th class="text-center">Plantilla</th><th class="text-center">Acciones</th></tr></thead>
-                            <tbody>
-                                <tr v-for="eq in equipos" :key="eq.id" class="border-b hover:bg-gray-50 transition">
-                                    <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-10 w-10 object-contain rounded-full border bg-white" /><div v-else class="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-xl">🛡️</div></td>
-                                    <td class="p-3 font-bold text-[#001a4d]">{{ formatearTextoMayusculas(eq.nombre) }}</td>
-                                    <td class="p-3 font-medium text-gray-700"><span v-if="eq.presidente" class="flex items-center gap-1">👤 {{ eq.presidente }}</span><span v-else class="text-gray-400 italic text-xs">Sin registrar</span></td>
-                                    <td class="p-3"><span class="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-bold">{{ eq.categoria }}</span></td>
-                                    <td class="p-3 text-center font-bold text-gray-600">{{ contarJugadores(eq.id) }} / 25</td>
-                                    <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararEdicionEquipo(eq)" class="bg-gray-100 hover:bg-gray-200 p-2 rounded">✏️</button><button @click="verPlantilla(eq)" class="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded">👥</button><button @click="eliminarEquipo(eq.id, eq.nombre)" class="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded">🗑️</button></div></td>
-                                </tr>
-                            </tbody>
-                        </table>
+                <div class="space-y-6">
+                    <!-- Tarjeta Categoría Máxima -->
+                    <div class="bg-white p-6 md:p-8 rounded-2xl border shadow-lg">
+                        <div class="flex items-center justify-between mb-4 pb-3 border-b">
+                            <div class="flex items-center gap-3">
+                                <span class="text-2xl">🏆</span>
+                                <div>
+                                    <h2 class="text-xl font-black text-[#001a4d]">Equipos - Categoría Máxima</h2>
+                                    <p class="text-xs text-gray-500">Serie A de la Liga Barrial</p>
+                                </div>
+                            </div>
+                            <span class="px-3 py-1 bg-blue-100 text-blue-900 rounded-full text-xs font-black">
+                                {{ equiposMaxima.length }} {{ equiposMaxima.length === 1 ? 'equipo' : 'equipos' }}
+                            </span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead><tr class="bg-gray-100 text-sm"><th class="p-3">Escudo</th><th class="p-3">Nombre</th><th class="p-3">Presidente</th><th class="p-3 text-center">Plantilla</th><th class="p-3 text-center">Acciones</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="eq in equiposMaxima" :key="eq.id" class="border-b hover:bg-gray-50 transition">
+                                        <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-10 w-10 object-contain rounded-full border bg-white" /><div v-else class="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-xl">🛡️</div></td>
+                                        <td class="p-3 font-bold text-[#001a4d]">{{ formatearTextoMayusculas(eq.nombre) }}</td>
+                                        <td class="p-3 font-medium text-gray-700"><span v-if="eq.presidente" class="flex items-center gap-1">👤 {{ eq.presidente }}</span><span v-else class="text-gray-400 italic text-xs">Sin registrar</span></td>
+                                        <td class="p-3 text-center font-bold text-gray-600">{{ contarJugadores(eq.id) }} / 25</td>
+                                        <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararEdicionEquipo(eq)" title="Editar Equipo" class="bg-gray-100 hover:bg-gray-200 p-2 rounded">✏️</button><button @click="verPlantilla(eq)" title="Ver Plantilla" class="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded">👥</button><button @click="eliminarEquipo(eq.id, eq.nombre)" title="Eliminar Equipo" class="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded">🗑️</button></div></td>
+                                    </tr>
+                                    <tr v-if="equiposMaxima.length === 0">
+                                        <td colspan="5" class="p-4 text-center text-gray-400 italic text-sm">No hay equipos registrados en Categoría Máxima</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Tarjeta Categoría Primera -->
+                    <div class="bg-white p-6 md:p-8 rounded-2xl border shadow-lg">
+                        <div class="flex items-center justify-between mb-4 pb-3 border-b">
+                            <div class="flex items-center gap-3">
+                                <span class="text-2xl">🥇</span>
+                                <div>
+                                    <h2 class="text-xl font-black text-[#001a4d]">Equipos - Categoría Primera</h2>
+                                    <p class="text-xs text-gray-500">Serie B de la Liga Barrial</p>
+                                </div>
+                            </div>
+                            <span class="px-3 py-1 bg-amber-100 text-amber-900 rounded-full text-xs font-black">
+                                {{ equiposPrimera.length }} {{ equiposPrimera.length === 1 ? 'equipo' : 'equipos' }}
+                            </span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead><tr class="bg-gray-100 text-sm"><th class="p-3">Escudo</th><th class="p-3">Nombre</th><th class="p-3">Presidente</th><th class="p-3 text-center">Plantilla</th><th class="p-3 text-center">Acciones</th></tr></thead>
+                                <tbody>
+                                    <tr v-for="eq in equiposPrimera" :key="eq.id" class="border-b hover:bg-gray-50 transition">
+                                        <td class="p-3"><img v-if="eq.url_logo" :src="eq.url_logo" class="h-10 w-10 object-contain rounded-full border bg-white" /><div v-else class="h-10 w-10 rounded-full bg-gray-100 flex items-center justify-center text-xl">🛡️</div></td>
+                                        <td class="p-3 font-bold text-[#001a4d]">{{ formatearTextoMayusculas(eq.nombre) }}</td>
+                                        <td class="p-3 font-medium text-gray-700"><span v-if="eq.presidente" class="flex items-center gap-1">👤 {{ eq.presidente }}</span><span v-else class="text-gray-400 italic text-xs">Sin registrar</span></td>
+                                        <td class="p-3 text-center font-bold text-gray-600">{{ contarJugadores(eq.id) }} / 25</td>
+                                        <td class="p-3 text-center"><div class="flex justify-center space-x-2"><button @click="prepararEdicionEquipo(eq)" title="Editar Equipo" class="bg-gray-100 hover:bg-gray-200 p-2 rounded">✏️</button><button @click="verPlantilla(eq)" title="Ver Plantilla" class="bg-blue-50 hover:bg-blue-100 text-blue-600 p-2 rounded">👥</button><button @click="eliminarEquipo(eq.id, eq.nombre)" title="Eliminar Equipo" class="bg-red-50 hover:bg-red-100 text-red-600 p-2 rounded">🗑️</button></div></td>
+                                    </tr>
+                                    <tr v-if="equiposPrimera.length === 0">
+                                        <td colspan="5" class="p-4 text-center text-gray-400 italic text-sm">No hay equipos registrados en Categoría Primera</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -938,34 +1015,57 @@ const alterarCategoriaClub = async (id, catActual) => {
                     <div v-if="msjTraspasoExito" class="bg-green-50 text-green-700 p-3 rounded-2xl text-xs mb-3 border border-green-200">✅ {{ msjTraspasoExito }}</div>
                     <form @submit.prevent="ejecutarTraspasoOficial" class="space-y-4">
                         <div class="bg-gradient-to-br from-gray-50 to-white p-4 rounded-2xl border border-gray-200 shadow-sm space-y-3">
-                            <div>
-                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">🔍 Buscar jugador</label>
-                                <input v-model="filtroTraspasoBusqueda" type="text" placeholder="Nombre, apellido o cédula" class="w-full p-3 border border-gray-300 rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 bg-white" />
+                            <div class="font-black text-[#001a4d] text-xs uppercase tracking-wider flex items-center gap-1.5 border-b pb-2">
+                                👤 Selección de Jugador (Origen)
                             </div>
                             <div>
-                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Seleccionar jugador</label>
-                                <select v-model="formTraspaso.id_jugador" required class="w-full p-3 border border-gray-300 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
-                                <option value="" disabled>-- Seleccione Jugador --</option>
-                                <option v-for="j in jugadoresParaTraspaso" :key="j.id_jugador" :value="j.id_jugador">{{ j.apellido }} {{ j.nombre }} ({{ j.nombre_equipo }})</option>
+                                <label class="block text-[11px] font-black text-gray-700 mb-1.5 uppercase tracking-wider">Categoría Origen</label>
+                                <select v-model="filtroTraspasoCategoriaOrigen" @change="filtroTraspasoEquipoOrigen = ''; formTraspaso.id_jugador = ''" class="w-full p-3 border border-gray-300 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                                    <option value="">-- Todas las Categorías --</option>
+                                    <option value="Máxima">🏆 Categoría Máxima</option>
+                                    <option value="Primera">🥇 Categoría Primera</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-black text-gray-700 mb-1.5 uppercase tracking-wider">Club Origen</label>
+                                <select v-model="filtroTraspasoEquipoOrigen" @change="formTraspaso.id_jugador = ''" class="w-full p-3 border border-gray-300 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                                    <option value="">-- Todos los Clubes --</option>
+                                    <option v-for="eq in equiposOrigenFiltrados" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }})</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-black text-gray-700 mb-1.5 uppercase tracking-wider">Jugador a Traspasar</label>
+                                <select v-model="formTraspaso.id_jugador" required class="w-full p-3 border border-gray-300 rounded-xl bg-white text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 text-[#001a4d]">
+                                    <option value="" disabled>-- Seleccione Jugador --</option>
+                                    <option v-for="j in jugadoresParaTraspaso" :key="j.id_jugador" :value="j.id_jugador">{{ j.apellido }} {{ j.nombre }} • {{ j.nombre_equipo }} (#{{ j.numero_camiseta }})</option>
                                 </select>
                             </div>
                         </div>
-                        <div class="bg-blue-50 p-4 rounded-2xl border border-blue-100 shadow-sm space-y-3">
-                            <div>
-                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">🔍 Buscar equipo destino</label>
-                                <input v-model="filtroTraspasoDestino" type="text" placeholder="Nombre del club" class="w-full p-3 border border-blue-200 rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 bg-white" />
+                        <div class="bg-blue-50/70 p-4 rounded-2xl border border-blue-100 shadow-sm space-y-3">
+                            <div class="font-black text-blue-900 text-xs uppercase tracking-wider flex items-center gap-1.5 border-b border-blue-200 pb-2">
+                                🛡️ Selección de Club Destino
                             </div>
                             <div>
-                                <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo equipo destino</label>
-                                <select v-model="formTraspaso.id_nuevo_equipo" required class="w-full p-3 border border-blue-200 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
-                                <option value="" disabled>-- Seleccione Destino --</option>
-                                <option v-for="eq in equiposDestinoParaTraspaso" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }}) {{ eq.presidente ? ' • Pres: ' + eq.presidente : '' }}</option>
+                                <label class="block text-[11px] font-black text-gray-700 mb-1.5 uppercase tracking-wider">Categoría Destino</label>
+                                <select v-model="filtroTraspasoCategoriaDestino" @change="formTraspaso.id_nuevo_equipo = ''" class="w-full p-3 border border-blue-200 rounded-xl bg-white text-sm font-medium outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
+                                    <option value="">-- Todas las Categorías --</option>
+                                    <option value="Máxima">🏆 Categoría Máxima</option>
+                                    <option value="Primera">🥇 Categoría Primera</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-[11px] font-black text-gray-700 mb-1.5 uppercase tracking-wider">Club Destino</label>
+                                <select v-model="formTraspaso.id_nuevo_equipo" required class="w-full p-3 border border-blue-200 rounded-xl bg-white text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100 text-blue-900">
+                                    <option value="" disabled>-- Seleccione Destino --</option>
+                                    <option v-for="eq in equiposDestinoParaTraspaso" :key="eq.id" :value="eq.id">{{ eq.nombre }} ({{ eq.categoria }}) {{ eq.presidente ? ' • Pres: ' + eq.presidente : '' }}</option>
                                 </select>
                             </div>
                         </div>
                         <div>
                             <label class="block text-[11px] font-black text-gray-700 mb-2 uppercase tracking-wider">Nuevo número de dorsal</label>
-                            <input v-model="formTraspaso.nuevo_numero_camiseta" type="number" required min="1" max="99" class="w-full p-3 border rounded-xl text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Ej. 10" />
+                            <input v-model="formTraspaso.nuevo_numero_camiseta" type="number" required min="1" max="99" :class="dorsalTraspasoExisteEnDestino ? 'border-red-500 ring-2 ring-red-100 bg-red-50 text-red-900' : 'border-gray-300'" class="w-full p-3 border rounded-xl text-sm font-bold outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" placeholder="Ej. 10" />
+                            <p v-if="dorsalTraspasoExisteEnDestino" class="text-xs text-red-600 font-bold mt-1.5 flex items-center gap-1">⚠️ El dorsal #{{ formTraspaso.nuevo_numero_camiseta }} ya está ocupado en {{ equipoDestinoTraspaso ? equipoDestinoTraspaso.nombre : 'este equipo' }}.</p>
+                            <p v-else-if="dorsalesOcupadosEquipoDestino.length > 0" class="text-[11px] text-gray-500 mt-1.5">Dorsales ya asignados en {{ equipoDestinoTraspaso ? equipoDestinoTraspaso.nombre : 'este club' }}: <span class="font-bold text-gray-700">{{ dorsalesOcupadosEquipoDestino.join(', ') }}</span></p>
                         </div>
                         <!-- Cuadro Informativo de Presidentes y Autorización -->
                         <div v-if="equipoOrigenTraspaso || equipoDestinoTraspaso" class="bg-indigo-50 border border-indigo-200 p-3.5 rounded-2xl space-y-2 text-xs">
