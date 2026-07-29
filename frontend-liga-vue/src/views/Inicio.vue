@@ -84,7 +84,6 @@ const obtenerLogo = (nombreEquipo) => {
     return eq ? eq.url_logo : null
 }
 
-const irARegistro = () => router.push('/registro-jugador')
 const irALogin = () => router.push('/login')
 </script>
 
@@ -100,9 +99,6 @@ const irALogin = () => router.push('/login')
             </div>
             
             <div class="flex space-x-4">
-                <button @click="irARegistro" class="bg-transparent border border-gray-300 text-gray-200 hover:border-white hover:text-white transition px-4 py-2 rounded-lg font-semibold text-sm md:text-base">
-                    Registro Jugadores
-                </button>
                 <button @click="irALogin" class="bg-yellow-400 hover:bg-yellow-500 text-[#001a4d] transition px-6 py-2 rounded-lg font-black shadow-md text-sm md:text-base">
                     Iniciar Sesión
                 </button>

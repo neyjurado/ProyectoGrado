@@ -193,9 +193,25 @@ const uploadToFirebase = async (file, folder) => { const formData = new FormData
 
 const limpiarFormularioJugador = () => { editandoJugador.value = false; idJugadorEditando.value = null; cedula.value = ''; id_equipo.value = ''; nombre.value = ''; apellido.value = ''; fecha_nacimiento.value = ''; numero_camiseta.value = ''; acepta_terminos.value = false; fotoBase64.value = ''; fotoTomada.value = false; camaraAbierta.value = false; removerDocumento(); mensajeError.value = ''; mensajeExito.value = ''; }
 const validarCedula = (event) => { const valor = (event?.target?.value ?? cedula.value).replace(/\D/g, '').slice(0, 10); cedula.value = valor }
+const validarChecksumCedula = (cedula) => {
+    if (!/^[0-9]{10}$/.test(cedula)) return false
+    const provincia = parseInt(cedula.slice(0, 2), 10)
+    const tercerDigito = parseInt(cedula[2], 10)
+    if (!((provincia >= 1 && provincia <= 24) || provincia === 30)) return false
+    if (tercerDigito > 6) return false
+    const coeficientes = [2, 1, 2, 1, 2, 1, 2, 1, 2]
+    let suma = 0
+    for (let i = 0; i < 9; i++) {
+        let producto = parseInt(cedula[i], 10) * coeficientes[i]
+        if (producto > 9) producto -= 9
+        suma += producto
+    }
+    const verificador = (10 - (suma % 10)) % 10
+    return verificador === parseInt(cedula[9], 10)
+}
 const validarJugadorFormulario = () => {
     const textoCedula = cedula.value.trim()
-    if (!/^[0-9]{1,10}$/.test(textoCedula)) return 'La cédula debe tener solo números y máximo 10 dígitos.'
+    if (!validarChecksumCedula(textoCedula)) return 'La cédula ingresada no es válida (debe tener 10 dígitos y un dígito verificador correcto).'
     if (!nombre.value.trim() || !apellido.value.trim()) return 'Ingresa nombres y apellidos del jugador.'
     if (!fecha_nacimiento.value) return 'Selecciona la fecha de nacimiento.'
     const edad = new Date().getFullYear() - new Date(fecha_nacimiento.value).getFullYear()
@@ -250,7 +266,7 @@ const registrarJugador = async () => {
 // ACCIONES EQUIPOS
 const seleccionarEscudo = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoSeleccionado.value = archivo; logoPreview.value = URL.createObjectURL(archivo); }
 const removerEscudo = () => { logoPreview.value = ''; archivoSeleccionado.value = null; }
-const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = formatearTextoMayusculas(equipo.nombre); nuevoEquipo.value.categoria = equipo.categoria; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+const prepararEdicionEquipo = (equipo) => { editandoEquipo.value = true; idEquipoEditando.value = equipo.id; nuevoEquipo.value.nombre = formatearTextoMayusculas(equipo.nombre); nuevoEquipo.value.categoria = equipo.categoria; nuevoEquipo.value.fecha_fundacion = equipo.fecha_fundacion || ''; logoPreview.value = equipo.url_logo || ''; window.scrollTo({ top: 0, behavior: 'smooth' }); }
 const eliminarEquipo = async (id, n) => { 
     if (contarJugadores(id) > 0) { alert("⚠️ No se puede eliminar: El equipo contiene jugadores registrados."); return; } 
     if (!confirm(`¿Dar de baja al equipo ${n}?`)) return; 
@@ -268,20 +284,35 @@ const cancelarEdicionEquipo = () => { editandoEquipo.value = false; nuevoEquipo.
 // ACCIONES ÁRBITROS
 const seleccionarArbitroFoto = (event) => { const archivo = event.target.files[0]; if (!archivo) return; archivoArbitroSeleccionado.value = archivo; arbitroFotoPreview.value = URL.createObjectURL(archivo); }
 const removerArbitroFoto = () => { arbitroFotoPreview.value = ''; archivoArbitroSeleccionado.value = null; }
-const registrarArbitro = async () => { cargandoArbitro.value = true; msjErrorArbitro.value = ''; let f = null; try { if (archivoArbitroSeleccionado.value) f = await uploadToFirebase(archivoArbitroSeleccionado.value, 'arbitros'); const res = await fetch('http://127.0.0.1:8000/arbitros', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre: nuevoArbitro.value.nombre.trim(), apellido: nuevoArbitro.value.apellido.trim(), cedula: nuevoArbitro.value.cedula ? nuevoArbitro.value.cedula.trim() : null, experiencia_anios: nuevoArbitro.value.experiencia_anios ? parseInt(nuevoArbitro.value.experiencia_anios) : null, url_foto: f }) }); if (res.ok) { nuevoArbitro.value = { nombre: '', apellido: '', cedula: '', experiencia_anios: '' }; removerArbitroFoto(); await cargarArbitros(); msjExitoArbitro.value="Registrado"; setTimeout(()=>msjExitoArbitro.value='', 3000); } else { const d = await res.json(); msjErrorArbitro.value = d.detail || 'No se pudo registrar el árbitro.'; } } catch (e) { msjErrorArbitro.value = 'Error de red.'; } finally { cargandoArbitro.value = false; } }
+const validarCedulaArbitro = (event) => { const valor = (event?.target?.value ?? nuevoArbitro.value.cedula).replace(/\D/g, '').slice(0, 10); nuevoArbitro.value.cedula = valor }
+const validarArbitroFormulario = () => {
+    const textoCedula = (nuevoArbitro.value.cedula || '').trim()
+    if (textoCedula && !validarChecksumCedula(textoCedula)) return 'La cédula ingresada no es válida (debe tener 10 dígitos y un dígito verificador correcto).'
+    if (nuevoArbitro.value.experiencia_anios !== '' && nuevoArbitro.value.experiencia_anios !== null && nuevoArbitro.value.experiencia_anios !== undefined) {
+        const experiencia = Number(nuevoArbitro.value.experiencia_anios)
+        if (!Number.isInteger(experiencia) || experiencia < 0 || experiencia > 60) return 'Los años de experiencia deben estar entre 0 y 60.'
+    }
+    return ''
+}
+const registrarArbitro = async () => {
+    const validacion = validarArbitroFormulario()
+    if (validacion) { msjErrorArbitro.value = validacion; return; }
+    cargandoArbitro.value = true; msjErrorArbitro.value = ''; let f = null; try { if (archivoArbitroSeleccionado.value) f = await uploadToFirebase(archivoArbitroSeleccionado.value, 'arbitros'); const res = await fetch('http://127.0.0.1:8000/arbitros', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ nombre: nuevoArbitro.value.nombre.trim(), apellido: nuevoArbitro.value.apellido.trim(), cedula: nuevoArbitro.value.cedula ? nuevoArbitro.value.cedula.trim() : null, experiencia_anios: nuevoArbitro.value.experiencia_anios ? parseInt(nuevoArbitro.value.experiencia_anios) : null, url_foto: f }) }); if (res.ok) { nuevoArbitro.value = { nombre: '', apellido: '', cedula: '', experiencia_anios: '' }; removerArbitroFoto(); await cargarArbitros(); msjExitoArbitro.value="Registrado"; setTimeout(()=>msjExitoArbitro.value='', 3000); } else { const d = await res.json(); msjErrorArbitro.value = d.detail || 'No se pudo registrar el árbitro.'; } } catch (e) { msjErrorArbitro.value = 'Error de red.'; } finally { cargandoArbitro.value = false; } }
 
 // CALENDARIO Y VOCALÍA
-const obtenerPasswordFixture = async () => {
-    const passwordIngresado = window.prompt('Ingresa la contraseña para generar el fixture', '')
+const obtenerCredencialesAdmin = async () => {
+    const usuarioSesion = JSON.parse(localStorage.getItem('usuario') || 'null')
+    if (!usuarioSesion?.correo) { alert('Sesión inválida, vuelve a iniciar sesión.'); return null }
+    const passwordIngresado = window.prompt('Confirma tu contraseña de administrador para continuar', '')
     if (!passwordIngresado || !passwordIngresado.trim()) return null
-    return passwordIngresado.trim()
+    return { correo: usuarioSesion.correo, password: passwordIngresado.trim() }
 }
 
-const generarFixtureConPassword = async (password) => {
+const generarFixtureConPassword = async (correo, password) => {
     const res = await fetch('http://127.0.0.1:8000/generar-calendario', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formCalendario.value, password })
+        body: JSON.stringify({ ...formCalendario.value, correo, password })
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(data.detail || 'No se pudo generar el fixture.')
@@ -302,11 +333,11 @@ const textoErrorApi = (detalle, fallback) => {
     return String(detalle)
 }
 
-const borrarFixtureConPassword = async (password) => {
+const borrarFixtureConPassword = async (correo, password) => {
     const res = await fetch('http://127.0.0.1:8000/partidos/fixture', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password })
+        body: JSON.stringify({ correo, password })
     })
     const data = await res.json().catch(() => ({}))
     if (!res.ok) throw new Error(textoErrorApi(data.detail, 'No se pudo borrar el fixture.'))
@@ -315,29 +346,11 @@ const borrarFixtureConPassword = async (password) => {
 
 const dispararGeneracionCalendario = async () => {
     if (!confirm('¿Generar el fixture con la fecha seleccionada?')) return
-    const password = await obtenerPasswordFixture()
-    if (!password) return
+    const credenciales = await obtenerCredencialesAdmin()
+    if (!credenciales) return
     cargandoCalendario.value = true
     try {
-        const mensaje = await generarFixtureConPassword(password)
-        await cargarPartidos()
-        await cargarEstadisticas()
-        alert(mensaje)
-    } catch (e) {
-        alert(textoErrorApi(e?.message, 'Error de red'))
-    } finally {
-        cargandoCalendario.value = false
-    }
-}
-
-const recrearFixtureCalendario = async () => {
-    if (!confirm('¿Eliminar el fixture actual y crear uno nuevo?')) return
-    const password = await obtenerPasswordFixture()
-    if (!password) return
-    cargandoCalendario.value = true
-    try {
-        await borrarFixtureConPassword(password)
-        const mensaje = await generarFixtureConPassword(password)
+        const mensaje = await generarFixtureConPassword(credenciales.correo, credenciales.password)
         await cargarPartidos()
         await cargarEstadisticas()
         alert(mensaje)
@@ -350,11 +363,11 @@ const recrearFixtureCalendario = async () => {
 
 const borrarFixtureActual = async () => {
     if (!confirm('¿Eliminar solo el fixture actual?')) return
-    const password = await obtenerPasswordFixture()
-    if (!password) return
+    const credenciales = await obtenerCredencialesAdmin()
+    if (!credenciales) return
     cargandoCalendario.value = true
     try {
-        const mensaje = await borrarFixtureConPassword(password)
+        const mensaje = await borrarFixtureConPassword(credenciales.correo, credenciales.password)
         await cargarPartidos()
         await cargarEstadisticas()
         alert(mensaje)
@@ -653,8 +666,8 @@ const alterarCategoriaClub = async (id, catActual) => {
                             <div><label class="block text-sm font-bold text-gray-700 mb-1">Nombres</label><input v-model="nuevoArbitro.nombre" type="text" required class="w-full p-3 border rounded-lg outline-none" /></div>
                             <div><label class="block text-sm font-bold text-gray-700 mb-1">Apellidos</label><input v-model="nuevoArbitro.apellido" type="text" required class="w-full p-3 border rounded-lg outline-none" /></div>
                         </div>
-                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Cédula</label><input v-model="nuevoArbitro.cedula" type="text" maxlength="10" inputmode="numeric" class="w-full p-3 border rounded-lg outline-none" /></div>
-                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Años de Experiencia</label><input v-model="nuevoArbitro.experiencia_anios" type="number" min="0" class="w-full p-3 border rounded-lg outline-none" /></div>
+                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Cédula</label><input v-model="nuevoArbitro.cedula" @input="validarCedulaArbitro" type="text" maxlength="10" inputmode="numeric" class="w-full p-3 border rounded-lg outline-none" /></div>
+                        <div><label class="block text-sm font-bold text-gray-700 mb-1">Años de Experiencia</label><input v-model="nuevoArbitro.experiencia_anios" type="number" min="0" max="60" class="w-full p-3 border rounded-lg outline-none" /></div>
                         <div>
                             <label class="block text-sm font-bold text-gray-700 mb-1">Fotografía de Perfil</label>
                             <div class="mt-1 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-300 border-dashed rounded-xl bg-gray-50 relative group">
@@ -700,7 +713,6 @@ const alterarCategoriaClub = async (id, catActual) => {
                             <input v-model="formCalendario.fecha_inicio" type="date" required class="w-full p-3 border rounded-xl text-sm outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
                         </div>
                         <button type="submit" class="w-full bg-[#001a4d] hover:bg-blue-900 text-white font-black py-3 rounded-xl text-sm shadow transition">Generar Fixture</button>
-                        <button type="button" @click="recrearFixtureCalendario" class="w-full bg-yellow-400 hover:bg-yellow-500 text-[#001a4d] font-black py-3 rounded-xl text-sm shadow transition">Borrar y recrear fixture</button>
                         <button type="button" @click="borrarFixtureActual" class="w-full bg-red-600 hover:bg-red-700 text-white font-black py-3 rounded-xl text-sm shadow transition">Borrar fixture actual</button>
                     </form>
                 </div>

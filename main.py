@@ -1,5 +1,7 @@
-import os
 import re
+import hashlib
+import hmac
+import secrets
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Body
 from pydantic import BaseModel
 from datetime import date, datetime, timedelta
@@ -7,30 +9,6 @@ from typing import Optional, List
 from database import get_db_connection
 from fastapi.middleware.cors import CORSMiddleware
 from firebase_service import upload_image_to_firebase
-
-FIXTURE_PASSWORD_FILE = os.path.join(os.path.dirname(__file__), "fixture_password.txt")
-
-def _load_fixture_password() -> str:
-    env_password = os.getenv("FIXTURE_PASSWORD", "").strip()
-    if env_password:
-        return env_password
-    if os.path.exists(FIXTURE_PASSWORD_FILE):
-        try:
-            with open(FIXTURE_PASSWORD_FILE, "r", encoding="utf-8") as fh:
-                password = fh.read().strip()
-                if password:
-                    return password
-        except Exception:
-            pass
-    return "LDPConocoto2024"
-
-
-def _save_fixture_password(password: str) -> None:
-    with open(FIXTURE_PASSWORD_FILE, "w", encoding="utf-8") as fh:
-        fh.write(password)
-
-
-FIXTURE_PASSWORD = _load_fixture_password()
 
 app = FastAPI(
     title="API Liga Conocoto",
@@ -81,11 +59,13 @@ class UsuarioLogin(BaseModel):
     correo: str
     password: str
 
-class GenerarCalendarioRequest(BaseModel):
-    fecha_inicio: date
+class AdminCredencialesRequest(BaseModel):
+    correo: str
     password: str
 
-class FixturePasswordRequest(BaseModel):
+class GenerarCalendarioRequest(BaseModel):
+    fecha_inicio: date
+    correo: str
     password: str
 
 class PartidoActualizar(BaseModel):
@@ -129,6 +109,44 @@ class CalificacionArbitro(BaseModel):
     id_jugador: int
     id_partido: int
     puntaje: int
+
+
+PBKDF2_ITERACIONES = 260_000
+
+
+def hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    hash_hex = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), PBKDF2_ITERACIONES).hex()
+    return f'pbkdf2_sha256${PBKDF2_ITERACIONES}${salt}${hash_hex}'
+
+
+def es_hash_pbkdf2(valor: str) -> bool:
+    return isinstance(valor, str) and valor.startswith('pbkdf2_sha256$') and valor.count('$') == 3
+
+
+def verificar_password(password: str, stored: str) -> bool:
+    if es_hash_pbkdf2(stored):
+        try:
+            _, iteraciones_str, salt, hash_hex = stored.split('$')
+            calculado = hashlib.pbkdf2_hmac('sha256', password.encode('utf-8'), salt.encode('utf-8'), int(iteraciones_str)).hex()
+            return hmac.compare_digest(calculado, hash_hex)
+        except (ValueError, TypeError):
+            return False
+    return hmac.compare_digest(password, stored or '')
+
+
+def verificar_credenciales_admin(cursor, correo: str, password: str) -> None:
+    cursor.execute("""
+        SELECT Id_Usuario, Password_Hash, Rol
+        FROM Usuarios
+        WHERE Correo COLLATE SQL_Latin1_General_CP1_CS_AS = ?
+    """, (correo,))
+    u = cursor.fetchone()
+    if not u or u.Rol != 'Administrador' or not verificar_password(password, u.Password_Hash):
+        raise HTTPException(status_code=401, detail="Credenciales de administrador inválidas.")
+    if not es_hash_pbkdf2(u.Password_Hash):
+        cursor.execute("UPDATE Usuarios SET Password_Hash = ? WHERE Id_Usuario = ?", (hash_password(password), u.Id_Usuario))
+        cursor.connection.commit()
 
 
 def validar_password_segura(password: str) -> str:
@@ -179,12 +197,49 @@ def validar_arbitros_distintos(partido: PartidoActualizar) -> str:
     return ''
 
 
+def validar_cedula_ecuatoriana(cedula: str) -> str:
+    texto = (cedula or '').strip()
+    if not re.fullmatch(r'\d{10}', texto):
+        return 'La cédula debe tener exactamente 10 dígitos numéricos.'
+    provincia = int(texto[0:2])
+    tercer_digito = int(texto[2])
+    if not (1 <= provincia <= 24 or provincia == 30):
+        return 'La cédula no tiene un código de provincia válido.'
+    if tercer_digito > 6:
+        return 'La cédula no tiene un tercer dígito válido.'
+    coeficientes = [2, 1, 2, 1, 2, 1, 2, 1, 2]
+    suma = 0
+    for digito, coeficiente in zip(texto[:9], coeficientes):
+        producto = int(digito) * coeficiente
+        if producto > 9:
+            producto -= 9
+        suma += producto
+    verificador = (10 - (suma % 10)) % 10
+    if verificador != int(texto[9]):
+        return 'La cédula ingresada no es válida (dígito verificador incorrecto).'
+    return ''
+
+
+def validar_numero_camiseta(numero: int) -> str:
+    if numero < 1 or numero > 99:
+        return 'El número de camiseta debe estar entre 1 y 99.'
+    return ''
+
+
+def validar_experiencia_anios(valor: Optional[int]) -> str:
+    if valor is None:
+        return ''
+    if valor < 0 or valor > 60:
+        return 'Los años de experiencia deben estar entre 0 y 60.'
+    return ''
+
+
 def validar_incidencias_vocalia(req: FinalizarPartidoRequest) -> str:
-    if req.goles_local < 0 or req.goles_visitante < 0:
-        return 'Los goles no pueden ser negativos.'
+    if req.goles_local < 0 or req.goles_local > 99 or req.goles_visitante < 0 or req.goles_visitante > 99:
+        return 'Los goles del equipo deben estar entre 0 y 99.'
     for inc in req.incidencias:
-        if inc.goles < 0:
-            return 'Los goles por jugador no pueden ser negativos.'
+        if inc.goles < 0 or inc.goles > 99:
+            return 'Los goles por jugador deben estar entre 0 y 99.'
         if inc.amarillas < 0 or inc.amarillas > 2:
             return 'Las tarjetas amarillas por jugador deben estar entre 0 y 2.'
         if inc.rojas < 0 or inc.rojas > 1:
@@ -211,8 +266,8 @@ def obtener_equipos():
     conn = get_db_connection()
     if not conn: raise HTTPException(status_code=500, detail="Error de BD")
     cursor = conn.cursor()
-    cursor.execute("SELECT Id_Equipo, Nombre_Equipo, Categoria, Url_Logo FROM Equipos")
-    equipos = [{"id": r.Id_Equipo, "nombre": r.Nombre_Equipo, "categoria": r.Categoria, "url_logo": r.Url_Logo} for r in cursor.fetchall()]
+    cursor.execute("SELECT Id_Equipo, Nombre_Equipo, Categoria, Url_Logo, Fecha_Fundacion FROM Equipos")
+    equipos = [{"id": r.Id_Equipo, "nombre": r.Nombre_Equipo, "categoria": r.Categoria, "url_logo": r.Url_Logo, "fecha_fundacion": r.Fecha_Fundacion.strftime("%Y-%m-%d") if r.Fecha_Fundacion else None} for r in cursor.fetchall()]
     conn.close()
     return equipos
 
@@ -298,6 +353,12 @@ def crear_jugador(jugador: JugadorCrear):
         validacion_fecha = validar_fecha_nacimiento_max_100(jugador.fecha_nacimiento)
         if validacion_fecha:
             raise HTTPException(status_code=400, detail=validacion_fecha)
+        validacion_cedula = validar_cedula_ecuatoriana(jugador.cedula)
+        if validacion_cedula:
+            raise HTTPException(status_code=400, detail=validacion_cedula)
+        validacion_camiseta = validar_numero_camiseta(jugador.numero_camiseta)
+        if validacion_camiseta:
+            raise HTTPException(status_code=400, detail=validacion_camiseta)
         cursor.execute("SELECT 1 FROM Arbitros WHERE Cedula = ?", (jugador.cedula,))
         if cursor.fetchone():
             raise HTTPException(status_code=400, detail="No se puede registrar un jugador con una cédula que ya pertenece a un árbitro.")
@@ -321,6 +382,12 @@ def actualizar_jugador(id_jugador: int, jugador: JugadorCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_cedula = validar_cedula_ecuatoriana(jugador.cedula)
+        if validacion_cedula:
+            raise HTTPException(status_code=400, detail=validacion_cedula)
+        validacion_camiseta = validar_numero_camiseta(jugador.numero_camiseta)
+        if validacion_camiseta:
+            raise HTTPException(status_code=400, detail=validacion_camiseta)
         cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Id_Equipo = ? AND Numero_Camiseta = ? AND Id_Jugador <> ?", (jugador.id_equipo, jugador.numero_camiseta, id_jugador))
         if cursor.fetchone(): raise HTTPException(status_code=400, detail=f"¡Error! La camiseta #{jugador.numero_camiseta} ya está ocupada.")
         cursor.execute("""
@@ -338,9 +405,20 @@ def eliminar_jugador(id_jugador: int):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        cursor.execute("""
+            SELECT
+              (SELECT COUNT(*) FROM Estadisticas_Jugadores WHERE Id_Jugador = ?) +
+              (SELECT COUNT(*) FROM Asistencia WHERE Id_Jugador = ?) +
+              (SELECT COUNT(*) FROM Suspensiones_Jugadores WHERE Id_Jugador = ?) +
+              (SELECT COUNT(*) FROM Calificaciones_Arbitros WHERE Id_Jugador = ?) +
+              (SELECT COUNT(*) FROM Usuarios WHERE Id_Jugador = ?) AS total
+        """, (id_jugador, id_jugador, id_jugador, id_jugador, id_jugador))
+        if cursor.fetchone().total > 0:
+            raise HTTPException(status_code=400, detail="No se puede dar de baja al jugador porque tiene historial asociado (estadísticas, asistencias, suspensiones, calificaciones o una cuenta de usuario vinculada).")
         cursor.execute("DELETE FROM Jugadores WHERE Id_Jugador = ?", (id_jugador,))
         conn.commit()
         return {"mensaje": "El jugador ha sido dado de baja exitosamente."}
+    except HTTPException: raise
     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
 
@@ -358,8 +436,14 @@ def crear_arbitro(arbitro: ArbitroCrear):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_experiencia = validar_experiencia_anios(arbitro.experiencia_anios)
+        if validacion_experiencia:
+            raise HTTPException(status_code=400, detail=validacion_experiencia)
         cedula = arbitro.cedula.strip() if arbitro.cedula else None
         if cedula:
+            validacion_cedula = validar_cedula_ecuatoriana(cedula)
+            if validacion_cedula:
+                raise HTTPException(status_code=400, detail=validacion_cedula)
             cursor.execute("SELECT Id_Jugador FROM Jugadores WHERE Cedula = ?", (cedula,))
             if cursor.fetchone():
                 raise HTTPException(status_code=400, detail="No se puede registrar un árbitro con una cédula que ya pertenece a un jugador.")
@@ -373,24 +457,12 @@ def crear_arbitro(arbitro: ArbitroCrear):
     except Exception as e: conn.rollback(); raise HTTPException(status_code=500, detail=str(e))
     finally: conn.close()
 
-@app.post("/config/fixture-password")
-def configurar_password_fixture(req: FixturePasswordRequest):
-    global FIXTURE_PASSWORD
-    if not req.password or not req.password.strip():
-        raise HTTPException(status_code=400, detail="La contraseña no puede estar vacía.")
-    password = req.password.strip()
-    FIXTURE_PASSWORD = password
-    _save_fixture_password(password)
-    return {"mensaje": "Contraseña del fixture actualizada."}
-
-
 @app.delete("/partidos/fixture")
-def borrar_fixture(req: FixturePasswordRequest = Body(...)):
+def borrar_fixture(req: AdminCredencialesRequest = Body(...)):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        if req.password != FIXTURE_PASSWORD:
-            raise HTTPException(status_code=401, detail="Contraseña incorrecta para borrar el fixture.")
+        verificar_credenciales_admin(cursor, req.correo, req.password)
         limpiar_fixture(cursor)
         conn.commit()
         return {"mensaje": "Fixture eliminado correctamente."}
@@ -593,6 +665,9 @@ def realizar_traspaso_jugador(id_jugador: int, req: TraspasoRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_camiseta = validar_numero_camiseta(req.nuevo_numero_camiseta)
+        if validacion_camiseta:
+            raise HTTPException(status_code=400, detail=validacion_camiseta)
         cursor.execute("SELECT COUNT(*) as total FROM Partidos WHERE Estado <> 'Finalizado'")
         if cursor.fetchone().total > 0:
             raise HTTPException(status_code=400, detail="Los traspasos quedan bloqueados hasta que se jueguen todos los partidos del torneo.")
@@ -649,8 +724,7 @@ def generar_calendario(req: GenerarCalendarioRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        if req.password != FIXTURE_PASSWORD:
-            raise HTTPException(status_code=401, detail="Contraseña incorrecta para generar el fixture.")
+        verificar_credenciales_admin(cursor, req.correo, req.password)
         limpiar_fixture(cursor)
         p_primera = generar_round_robin_por_categoria(cursor, "Primera", req.fecha_inicio)
         p_maxima = generar_round_robin_por_categoria(cursor, "Máxima", req.fecha_inicio + timedelta(days=1))
@@ -716,12 +790,16 @@ def iniciar_sesion(credenciales: UsuarioLogin):
         """, (credenciales.correo,))
         
         u = cursor.fetchone()
-        
-        if not u or credenciales.password != u.Password_Hash: 
+
+        if not u or not verificar_password(credenciales.password, u.Password_Hash):
             raise HTTPException(status_code=401, detail="Credenciales incorrectas")
-            
+
+        if not es_hash_pbkdf2(u.Password_Hash):
+            cursor.execute("UPDATE Usuarios SET Password_Hash = ? WHERE Id_Usuario = ?", (hash_password(credenciales.password), u.Id_Usuario))
+            conn.commit()
+
         return {"usuario": {"id": u.Id_Usuario, "correo": u.Correo, "rol": u.Rol, "id_jugador": u.Id_Jugador if hasattr(u, 'Id_Jugador') else None}}
-    finally: 
+    finally:
         conn.close()
 
 @app.post("/upload-image")
@@ -862,6 +940,10 @@ def registrar_usuario(req: UsuarioRegistro):
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
+        validacion_cedula = validar_cedula_ecuatoriana(req.cedula)
+        if validacion_cedula:
+            raise HTTPException(status_code=400, detail=validacion_cedula)
+
         # 1. Validar que la Cédula exista en la tabla Jugadores (Que el admin ya lo haya inscrito)
         cursor.execute("SELECT Id_Jugador, Nombre, Apellido FROM Jugadores WHERE Cedula = ?", (req.cedula,))
         jugador = cursor.fetchone()
@@ -890,7 +972,7 @@ def registrar_usuario(req: UsuarioRegistro):
         cursor.execute("""
             INSERT INTO Usuarios (Correo, Password_Hash, Rol, Id_Jugador)
             VALUES (?, ?, 'Jugador', ?)
-        """, (correo_normalizado, req.password, id_jugador))
+        """, (correo_normalizado, hash_password(req.password), id_jugador))
         conn.commit()
         
         return {"mensaje": f"¡Bienvenido {jugador.Nombre}! Tu cuenta ha sido creada exitosamente. Ya puedes iniciar sesión."}
